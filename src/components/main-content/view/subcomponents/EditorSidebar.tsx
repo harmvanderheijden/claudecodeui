@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import CodeEditor from '../../../CodeEditor';
+import DocumentViewerRouter from '../../../viewers/DocumentViewerRouter';
 import type { EditorSidebarProps } from '../../types/types';
 
-const AnyCodeEditor = CodeEditor as any;
+const AnyDocumentViewerRouter = DocumentViewerRouter as any;
 
 export default function EditorSidebar({
   editingFile,
@@ -24,7 +24,7 @@ export default function EditorSidebar({
 
   if (isMobile || poppedOut) {
     return (
-      <AnyCodeEditor
+      <AnyDocumentViewerRouter
         file={editingFile}
         onClose={() => {
           setPoppedOut(false);
@@ -55,7 +55,7 @@ export default function EditorSidebar({
         className={`flex-shrink-0 border-l border-gray-200 dark:border-gray-700 h-full overflow-hidden ${useFlex ? 'flex-1' : ''}`}
         style={useFlex ? undefined : { width: `${editorWidth}px` }}
       >
-        <AnyCodeEditor
+        <AnyDocumentViewerRouter
           file={editingFile}
           onClose={onCloseEditor}
           projectPath={projectPath}
