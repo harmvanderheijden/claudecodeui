@@ -239,13 +239,6 @@ function ChatInterface({
   }, [canAbortSession, handleAbortSession, isLoading]);
 
   useEffect(() => {
-    const processingSessionId = selectedSession?.id || currentSessionId;
-    if (processingSessionId && isLoading && onSessionProcessing) {
-      onSessionProcessing(processingSessionId);
-    }
-  }, [currentSessionId, isLoading, onSessionProcessing, selectedSession?.id]);
-
-  useEffect(() => {
     return () => {
       resetStreamingState();
     };
