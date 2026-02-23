@@ -109,7 +109,7 @@ function MainContent({
       />
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        <div className={`flex flex-col min-h-0 overflow-hidden ${editorExpanded ? 'hidden' : ''} ${activeTab === 'files' && editingFile ? 'w-[280px] flex-shrink-0' : 'flex-1'}`}>
+        <div className={`flex flex-col min-h-0 overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1 ${activeTab === 'files' && editingFile ? 'min-w-[200px]' : ''}`}>
           <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
             <ErrorBoundary showDetails>
               <ChatInterface

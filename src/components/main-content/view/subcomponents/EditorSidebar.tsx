@@ -36,7 +36,7 @@ export default function EditorSidebar({
     );
   }
 
-  const useFlex = editorExpanded || fillSpace;
+  const useFlex = editorExpanded;
 
   return (
     <>
