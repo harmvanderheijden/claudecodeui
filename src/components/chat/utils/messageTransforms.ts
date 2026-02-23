@@ -397,6 +397,7 @@ export const convertSessionMessages = (rawMessages: any[]): ChatMessage[] => {
         content.startsWith('<command-message>') ||
         content.startsWith('<command-args>') ||
         content.startsWith('<local-command-stdout>') ||
+        content.startsWith('<local-command-caveat>') ||
         content.startsWith('<system-reminder>') ||
         content.startsWith('Caveat:') ||
         content.startsWith('This session is being continued from a previous') ||

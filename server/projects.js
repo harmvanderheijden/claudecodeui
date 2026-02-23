@@ -799,6 +799,7 @@ async function parseJsonlSessions(filePath) {
                 textContent.startsWith('<command-message>') ||
                 textContent.startsWith('<command-args>') ||
                 textContent.startsWith('<local-command-stdout>') ||
+                textContent.startsWith('<local-command-caveat>') ||
                 textContent.startsWith('<system-reminder>') ||
                 textContent.startsWith('Caveat:') ||
                 textContent.startsWith('This session is being continued from a previous') ||
