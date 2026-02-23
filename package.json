@@ -32,7 +32,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "npm run build && npm run server",
     "release": "./release.sh",
-    "postinstall": "node scripts/fix-node-pty.js"
+    "postinstall": "node scripts/fix-node-pty.js && node scripts/copy-pdfjs-wasm.js"
   },
   "keywords": [
     "claude code",

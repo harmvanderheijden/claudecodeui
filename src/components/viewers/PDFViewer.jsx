@@ -3,13 +3,21 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { X, Download, Maximize2, Minimize2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight } from 'lucide-react';
 import { authenticatedFetch } from '../../utils/api';
 import { useTranslation } from 'react-i18next';
-
 // Import react-pdf styles
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+
+// PDF.js options (CMap, standard fonts, and OpenJPEG WASM for JPEG 2000 images)
+// wasmUrl must be absolute because the worker runs from unpkg CDN origin
+const pdfOptions = {
+  cMapUrl: `//unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
+  cMapPacked: true,
+  standardFontDataUrl: `//unpkg.com/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
+  wasmUrl: `${window.location.origin}/pdfjs-wasm/`,
+};
 
 export default function PDFViewer({
   file,
@@ -236,6 +244,7 @@ export default function PDFViewer({
           <div className="flex justify-center p-4">
             <Document
               file={pdfUrl}
+              options={pdfOptions}
               onLoadSuccess={onDocumentLoadSuccess}
               onLoadError={onDocumentLoadError}
               loading={

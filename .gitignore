@@ -131,3 +131,6 @@ dev-debug.log
 tasks.json
 tasks/ 
 pdf/
+
+# Copied from node_modules by postinstall script
+public/pdfjs-wasm/
