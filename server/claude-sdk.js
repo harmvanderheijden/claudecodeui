@@ -455,24 +455,31 @@ async function loadMcpConfig(cwd) {
  * @returns {Promise<void>}
  */
 async function queryClaudeSDK(command, options = {}, ws) {
+  const startTime = Date.now();
+  console.log(`[TIMING] queryClaudeSDK started at ${new Date().toISOString()}`);
+
   const { sessionId } = options;
   let capturedSessionId = sessionId;
   let sessionCreatedSent = false;
   let tempImagePaths = [];
   let tempDir = null;
+  let firstMessageReceived = false;
 
   try {
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(options);
+    console.log(`[TIMING] Options mapped (${Date.now() - startTime}ms)`);
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
+    console.log(`[TIMING] MCP config loaded (${Date.now() - startTime}ms)`);
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;
     }
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
+    console.log(`[TIMING] Images handled (${Date.now() - startTime}ms)`);
     const finalCommand = imageResult.modifiedCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
@@ -552,6 +559,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       prompt: finalCommand,
       options: sdkOptions
     });
+    console.log(`[TIMING] Query instance created (${Date.now() - startTime}ms)`);
 
     // Restore immediately — Query constructor already captured the value
     if (prevStreamTimeout !== undefined) {
@@ -566,8 +574,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
     }
 
     // Process streaming messages
-    console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
+    console.log(`[TIMING] Starting async generator loop for session: ${capturedSessionId || 'NEW'} (${Date.now() - startTime}ms)`);
     for await (const message of queryInstance) {
+      if (!firstMessageReceived) {
+        // Extract content preview for debugging - log full message structure to understand format
+        console.log(`[TIMING] First message received from SDK (${Date.now() - startTime}ms)`);
+        console.log('[DEBUG] First message structure:', JSON.stringify(message, null, 2).substring(0, 500));
+        firstMessageReceived = true;
+      }
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
@@ -586,15 +600,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
             type: 'session-created',
             sessionId: capturedSessionId
           });
-        } else {
-          console.log('Not sending session-created. sessionId:', sessionId, 'sessionCreatedSent:', sessionCreatedSent);
         }
-      } else {
-        console.log('No session_id in message or already captured. message.session_id:', message.session_id, 'capturedSessionId:', capturedSessionId);
       }
 
       // Transform and send message to WebSocket
       const transformedMessage = transformMessage(message);
+
+      // Log message content preview for debugging - show full structure if no obvious text
+      const msgStructure = JSON.stringify(transformedMessage).substring(0, 300);
+      console.log(`[TIMING] Sending message to WS (${Date.now() - startTime}ms), type: ${transformedMessage.type}`);
+      console.log(`[DEBUG] Message structure: ${msgStructure}`);
+
       ws.send({
         type: 'claude-response',
         data: transformedMessage,
@@ -624,14 +640,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
     await cleanupTempFiles(tempImagePaths, tempDir);
 
     // Send completion event
-    console.log('Streaming complete, sending claude-complete event');
+    console.log(`[TIMING] Streaming complete, sending claude-complete event (${Date.now() - startTime}ms)`);
     ws.send({
       type: 'claude-complete',
       sessionId: capturedSessionId,
       exitCode: 0,
       isNewSession: !sessionId && !!command
     });
-    console.log('claude-complete event sent');
+    console.log(`[TIMING] claude-complete event sent, total time: ${Date.now() - startTime}ms`);
 
   } catch (error) {
     console.error('SDK query error:', error);
