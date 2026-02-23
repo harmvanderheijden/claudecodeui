@@ -156,6 +156,7 @@ function mapCliOptionsToSDK(options = {}) {
   if (settings.skipPermissions && permissionMode !== 'plan') {
     // When skipping permissions, use bypassPermissions mode
     sdkOptions.permissionMode = 'bypassPermissions';
+    sdkOptions.allowDangerouslySkipPermissions = true;
   }
 
   let allowedTools = [...(settings.allowedTools || [])];
@@ -278,8 +279,7 @@ function extractTokenBudget(resultMessage) {
     return null;
   }
 
-  // Use cumulative tokens if available (tracks total for the session)
-  // Otherwise fall back to per-request tokens
+  // SDK v0.2 provides per-request tokens directly (no cumulative fields)
   const inputTokens = modelData.cumulativeInputTokens || modelData.inputTokens || 0;
   const outputTokens = modelData.cumulativeOutputTokens || modelData.outputTokens || 0;
   const cacheReadTokens = modelData.cumulativeCacheReadInputTokens || modelData.cacheReadInputTokens || 0;
@@ -288,9 +288,11 @@ function extractTokenBudget(resultMessage) {
   // Total used = input + output + cache tokens
   const totalUsed = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
 
-  // Use configured context window budget from environment (default 160000)
-  // This is the user's budget limit, not the model's context window
-  const contextWindow = parseInt(process.env.CONTEXT_WINDOW) || 160000;
+  // Prefer contextWindow from modelUsage (SDK v0.2 provides this per-model),
+  // then fall back to env config, then default
+  const contextWindow = modelData.contextWindow
+    || parseInt(process.env.CONTEXT_WINDOW)
+    || 160000;
 
   console.log(`Token calculation: input=${inputTokens}, output=${outputTokens}, cache=${cacheReadTokens + cacheCreationTokens}, total=${totalUsed}/${contextWindow}`);
 
@@ -484,7 +486,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
 
-    sdkOptions.canUseTool = async (toolName, input, context) => {
+    // SDK v0.2+ spawns a subprocess; CLAUDECODE env var triggers nesting detection.
+    // Provide a clean env without it so the subprocess can start normally.
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.CLAUDECODE;
+    delete cleanEnv.CLAUDE_CODE_ENTRYPOINT;
+    delete cleanEnv.CLAUDE_AGENT_SDK_VERSION;
+    sdkOptions.env = cleanEnv;
+
+    sdkOptions.canUseTool = async (toolName, input, sdkContext) => {
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
@@ -513,12 +523,16 @@ async function queryClaudeSDK(command, options = {}, ws) {
         requestId,
         toolName,
         input,
+        // Forward SDK v0.2 context fields to the frontend
+        suggestions: sdkContext?.suggestions,
+        decisionReason: sdkContext?.decisionReason,
+        toolUseID: sdkContext?.toolUseID,
         sessionId: capturedSessionId || sessionId || null
       });
 
       const decision = await waitForToolApproval(requestId, {
         timeoutMs: requiresInteraction ? 0 : undefined,
-        signal: context?.signal,
+        signal: sdkContext?.signal,
         onCancel: (reason) => {
           ws.send({
             type: 'claude-permission-cancelled',
@@ -537,7 +551,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }
 
       if (decision.allow) {
+        // Build updatedPermissions from rememberEntry (backward-compatible with UI)
+        const result = { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
         if (decision.rememberEntry && typeof decision.rememberEntry === 'string') {
+          // Use SDK v0.2 updatedPermissions format to persist the allow rule
+          result.updatedPermissions = [{
+            type: 'addRules',
+            rules: [{ toolName: decision.rememberEntry }],
+            behavior: 'allow',
+            destination: 'session'
+          }];
+          // Also update local state for this session
           if (!sdkOptions.allowedTools.includes(decision.rememberEntry)) {
             sdkOptions.allowedTools.push(decision.rememberEntry);
           }
@@ -545,7 +569,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
             sdkOptions.disallowedTools = sdkOptions.disallowedTools.filter(entry => entry !== decision.rememberEntry);
           }
         }
-        return { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
+        return result;
       }
 
       return { behavior: 'deny', message: decision.message ?? 'User denied tool use' };
@@ -577,9 +601,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     console.log(`[TIMING] Starting async generator loop for session: ${capturedSessionId || 'NEW'} (${Date.now() - startTime}ms)`);
     for await (const message of queryInstance) {
       if (!firstMessageReceived) {
-        // Extract content preview for debugging - log full message structure to understand format
         console.log(`[TIMING] First message received from SDK (${Date.now() - startTime}ms)`);
-        console.log('[DEBUG] First message structure:', JSON.stringify(message, null, 2).substring(0, 500));
         firstMessageReceived = true;
       }
       // Capture session ID from first message
@@ -606,10 +628,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       // Transform and send message to WebSocket
       const transformedMessage = transformMessage(message);
 
-      // Log message content preview for debugging - show full structure if no obvious text
-      const msgStructure = JSON.stringify(transformedMessage).substring(0, 300);
       console.log(`[TIMING] Sending message to WS (${Date.now() - startTime}ms), type: ${transformedMessage.type}`);
-      console.log(`[DEBUG] Message structure: ${msgStructure}`);
 
       ws.send({
         type: 'claude-response',
