@@ -7,6 +7,7 @@ export const VIEWER_TYPES = {
   CODE: 'code',
   PDF: 'pdf',
   IMAGE: 'image',
+  MARKDOWN: 'markdown',
   // Future viewer types:
   // OFFICE: 'office',
   // EMAIL: 'email',
@@ -29,6 +30,13 @@ export const VIEWER_CONFIG = {
     renderIn: 'modal', // Images use modal overlay for better viewing
   },
 
+  [VIEWER_TYPES.MARKDOWN]: {
+    extensions: ['md', 'mdx', 'markdown'],
+    mimeTypes: ['text/markdown'],
+    canEdit: false,
+    renderIn: 'sidebar',
+  },
+
   [VIEWER_TYPES.CODE]: {
     // Default viewer for text-based files
     extensions: [
@@ -45,7 +53,7 @@ export const VIEWER_CONFIG = {
       'json', 'jsonc', 'json5', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'sql',
       'toml', 'ini', 'cfg', 'conf',
       // Documents
-      'md', 'mdx', 'txt', 'rst', 'tex',
+      'txt', 'rst', 'tex',
       // Shell
       'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
       // Other

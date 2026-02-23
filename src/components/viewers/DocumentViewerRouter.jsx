@@ -1,6 +1,7 @@
 import React from 'react';
 import CodeEditor from '../CodeEditor';
 import PDFViewer from './PDFViewer';
+import MarkdownViewer from './MarkdownViewer';
 import { getViewerType, VIEWER_TYPES } from './viewerRegistry';
 
 /**
@@ -27,6 +28,19 @@ export default function DocumentViewerRouter({
     case VIEWER_TYPES.PDF:
       return (
         <PDFViewer
+          file={file}
+          onClose={onClose}
+          projectPath={projectPath}
+          isSidebar={isSidebar}
+          isExpanded={isExpanded}
+          onToggleExpand={onToggleExpand}
+          onPopOut={onPopOut}
+        />
+      );
+
+    case VIEWER_TYPES.MARKDOWN:
+      return (
+        <MarkdownViewer
           file={file}
           onClose={onClose}
           projectPath={projectPath}
