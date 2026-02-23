@@ -8,8 +8,8 @@ export const VIEWER_TYPES = {
   PDF: 'pdf',
   IMAGE: 'image',
   MARKDOWN: 'markdown',
+  DOCX: 'docx',
   // Future viewer types:
-  // OFFICE: 'office',
   // EMAIL: 'email',
   // VIDEO: 'video',
   // AUDIO: 'audio',
@@ -33,6 +33,13 @@ export const VIEWER_CONFIG = {
   [VIEWER_TYPES.MARKDOWN]: {
     extensions: ['md', 'mdx', 'markdown'],
     mimeTypes: ['text/markdown'],
+    canEdit: false,
+    renderIn: 'sidebar',
+  },
+
+  [VIEWER_TYPES.DOCX]: {
+    extensions: ['docx'],
+    mimeTypes: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
     canEdit: false,
     renderIn: 'sidebar',
   },
