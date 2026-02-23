@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useCallback, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import MessageComponent from './MessageComponent';
@@ -51,6 +51,7 @@ interface ChatMessagesPaneProps {
   showThinking?: boolean;
   selectedProject: Project;
   isLoading: boolean;
+  claudeStatus?: { text: string; tokens: number; can_interrupt: boolean } | null;
 }
 
 export default function ChatMessagesPane({
@@ -95,11 +96,22 @@ export default function ChatMessagesPane({
   showThinking,
   selectedProject,
   isLoading,
+  claudeStatus,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
   const allocatedKeysRef = useRef<Set<string>>(new Set());
   const generatedMessageKeyCounterRef = useRef(0);
+
+  // Compute activity stats from messages for the thinking indicator
+  const activityStats = useMemo(() => {
+    const toolMessages = chatMessages.filter((m) => m.isToolUse);
+    const lastTool = toolMessages.length > 0 ? toolMessages[toolMessages.length - 1] : null;
+    return {
+      toolCount: toolMessages.length,
+      lastToolName: lastTool?.toolName || null,
+    };
+  }, [chatMessages]);
 
   // Keep keys stable across prepends so existing MessageComponent instances retain local state.
   const getMessageKey = useCallback((message: ChatMessage) => {
@@ -258,7 +270,14 @@ export default function ChatMessagesPane({
         </>
       )}
 
-      {isLoading && <AssistantThinkingIndicator selectedProvider={provider} />}
+      {isLoading && (
+        <AssistantThinkingIndicator
+          selectedProvider={provider}
+          claudeStatus={claudeStatus}
+          toolCount={activityStats.toolCount}
+          lastToolName={activityStats.lastToolName}
+        />
+      )}
     </div>
   );
 }
