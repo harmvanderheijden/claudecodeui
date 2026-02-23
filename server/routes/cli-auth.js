@@ -75,6 +75,7 @@ router.get('/codex/status', async (req, res) => {
 });
 
 async function checkClaudeCredentials() {
+  // First, try to check OAuth credentials from ~/.claude/.credentials.json
   try {
     const credPath = path.join(os.homedir(), '.claude', '.credentials.json');
     const content = await fs.readFile(credPath, 'utf8');
@@ -87,21 +88,38 @@ async function checkClaudeCredentials() {
       if (!isExpired) {
         return {
           authenticated: true,
-          email: creds.email || creds.user || null
+          email: creds.email || creds.user || null,
+          method: 'oauth'
         };
       }
     }
-
-    return {
-      authenticated: false,
-      email: null
-    };
   } catch (error) {
-    return {
-      authenticated: false,
-      email: null
-    };
+    // OAuth credentials not found or invalid, continue to check API key
   }
+
+  // If OAuth check failed, try to check for API key in ~/.claude.json
+  try {
+    const configPath = path.join(os.homedir(), '.claude.json');
+    const configContent = await fs.readFile(configPath, 'utf8');
+    const config = JSON.parse(configContent);
+
+    // Check if primaryApiKey exists and starts with the expected prefix
+    if (config.primaryApiKey && config.primaryApiKey.startsWith('sk-ant-')) {
+      return {
+        authenticated: true,
+        email: config.oauthAccount?.emailAddress || null,
+        method: 'api_key'
+      };
+    }
+  } catch (error) {
+    // API key not found or invalid
+  }
+
+  // Neither OAuth nor API key found
+  return {
+    authenticated: false,
+    email: null
+  };
 }
 
 function checkCursorStatus() {
