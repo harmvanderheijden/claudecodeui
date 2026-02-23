@@ -71,7 +71,10 @@ export function useChatSessionState({
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [totalMessages, setTotalMessages] = useState(0);
-  const [isSystemSessionChange, setIsSystemSessionChange] = useState(false);
+  const isSystemSessionChangeRef = useRef(false);
+  const setIsSystemSessionChange = useCallback((value: boolean) => {
+    isSystemSessionChangeRef.current = value;
+  }, []);
   const [canAbortSession, setCanAbortSession] = useState(false);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [tokenBudget, setTokenBudget] = useState<Record<string, unknown> | null>(null);
@@ -329,7 +332,7 @@ export function useChatSessionState({
 
         const sessionChanged = currentSessionId !== null && currentSessionId !== selectedSession.id;
         if (sessionChanged) {
-          if (!isSystemSessionChange) {
+          if (!isSystemSessionChangeRef.current) {
             resetStreamingState();
             pendingViewSessionRef.current = null;
             setChatMessages([]);
@@ -377,18 +380,18 @@ export function useChatSessionState({
           setCurrentSessionId(selectedSession.id);
           sessionStorage.setItem('cursorSessionId', selectedSession.id);
 
-          if (!isSystemSessionChange) {
+          if (!isSystemSessionChangeRef.current) {
             const projectPath = selectedProject.fullPath || selectedProject.path || '';
             const converted = await loadCursorSessionMessages(projectPath, selectedSession.id);
             setSessionMessages([]);
             setChatMessages(converted);
           } else {
-            setIsSystemSessionChange(false);
+            isSystemSessionChangeRef.current = false;
           }
         } else {
           setCurrentSessionId(selectedSession.id);
 
-          if (!isSystemSessionChange) {
+          if (!isSystemSessionChangeRef.current) {
             const messages = await loadSessionMessages(
               selectedProject.name,
               selectedSession.id,
@@ -397,11 +400,11 @@ export function useChatSessionState({
             );
             setSessionMessages(messages);
           } else {
-            setIsSystemSessionChange(false);
+            isSystemSessionChangeRef.current = false;
           }
         }
       } else {
-        if (!isSystemSessionChange) {
+        if (!isSystemSessionChangeRef.current) {
           resetStreamingState();
           pendingViewSessionRef.current = null;
           setChatMessages([]);
@@ -427,7 +430,8 @@ export function useChatSessionState({
     loadMessages();
   }, [
     // Intentionally exclude currentSessionId: this effect sets it and should not retrigger another full load.
-    isSystemSessionChange,
+    // isSystemSessionChangeRef is a ref — read inside the effect but not a dependency, so toggling it
+    // from true→false no longer re-triggers the effect (which was causing the disappearing-balloon bug).
     loadCursorSessionMessages,
     loadSessionMessages,
     pendingViewSessionRef,
@@ -715,7 +719,7 @@ export function useChatSessionState({
     isLoadingMoreMessages,
     hasMoreMessages,
     totalMessages,
-    isSystemSessionChange,
+    isSystemSessionChange: isSystemSessionChangeRef.current,
     setIsSystemSessionChange,
     canAbortSession,
     setCanAbortSession,
