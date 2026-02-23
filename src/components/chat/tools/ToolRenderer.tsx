@@ -43,6 +43,74 @@ function getToolCategory(toolName: string): string {
 }
 
 /**
+ * Generate a compact one-line preview string for collapsible tool sections.
+ * For objects, renders as { key: value, key2: value2 }.
+ * For strings, takes the first line / first ~120 chars.
+ */
+function generatePreview(data: any): string {
+  if (data == null) return '';
+
+  if (typeof data === 'object' && !Array.isArray(data)) {
+    const entries = Object.entries(data);
+    if (entries.length === 0) return '{}';
+    const parts = entries.map(([key, val]) => {
+      let v: string;
+      if (val == null) v = 'null';
+      else if (typeof val === 'string') v = val.length > 40 ? val.slice(0, 40) + '\u2026' : val;
+      else if (typeof val === 'object') v = Array.isArray(val) ? `[${val.length}]` : '{...}';
+      else v = String(val);
+      return `${key}: ${v}`;
+    });
+    return `{ ${parts.join(', ')} }`;
+  }
+
+  if (Array.isArray(data)) {
+    return `[${data.length} item${data.length !== 1 ? 's' : ''}]`;
+  }
+
+  const str = String(data);
+  const firstLine = str.split('\n')[0];
+  return firstLine.length > 120 ? firstLine.slice(0, 120) + '\u2026' : firstLine;
+}
+
+/**
+ * Generate a preview for tool result content.
+ * Handles the various shapes results can take.
+ */
+function generateResultPreview(data: any): string {
+  if (data == null) return '';
+
+  // Tool results often have a { content, isError } shape
+  const content = data?.content ?? data;
+
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    if (!trimmed) return '';
+    const firstLine = trimmed.split('\n')[0];
+    return firstLine.length > 120 ? firstLine.slice(0, 120) + '\u2026' : firstLine;
+  }
+
+  if (Array.isArray(content)) {
+    // Array of content blocks (Anthropic format)
+    const texts = content
+      .filter((c: any) => c.type === 'text' && c.text)
+      .map((c: any) => c.text.trim());
+    if (texts.length > 0) {
+      const joined = texts.join(' ');
+      const firstLine = joined.split('\n')[0];
+      return firstLine.length > 120 ? firstLine.slice(0, 120) + '\u2026' : firstLine;
+    }
+    return `[${content.length} item${content.length !== 1 ? 's' : ''}]`;
+  }
+
+  if (typeof content === 'object') {
+    return generatePreview(content);
+  }
+
+  return String(content).slice(0, 120);
+}
+
+/**
  * Main tool renderer router
  * Routes to OneLineDisplay or CollapsibleDisplay based on tool config
  */
@@ -220,6 +288,10 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         })
       : undefined;
 
+    const preview = mode === 'input'
+      ? generatePreview(parsedData)
+      : generateResultPreview(parsedData);
+
     return (
       <CollapsibleDisplay
         toolName={toolName}
@@ -230,6 +302,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         showRawParameters={mode === 'input' && showRawParameters}
         rawContent={rawToolInput}
         toolCategory={getToolCategory(toolName)}
+        preview={preview}
       >
         {contentComponent}
       </CollapsibleDisplay>

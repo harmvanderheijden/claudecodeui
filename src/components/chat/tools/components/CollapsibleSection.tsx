@@ -8,6 +8,7 @@ interface CollapsibleSectionProps {
   onTitleClick?: () => void;
   children: React.ReactNode;
   className?: string;
+  preview?: string;
 }
 
 /**
@@ -20,7 +21,8 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   action,
   onTitleClick,
   children,
-  className = ''
+  className = '',
+  preview
 }) => {
   return (
     <details className={`relative group/details ${className}`} open={open}>
@@ -42,13 +44,18 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
         {onTitleClick ? (
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTitleClick(); }}
-            className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-mono hover:underline truncate flex-1 text-left transition-colors"
+            className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-mono hover:underline truncate text-left transition-colors flex-shrink-0"
           >
             {title}
           </button>
         ) : (
-          <span className="text-gray-600 dark:text-gray-400 truncate flex-1">
+          <span className="text-gray-600 dark:text-gray-400 truncate flex-shrink-0">
             {title}
+          </span>
+        )}
+        {preview && (
+          <span className="text-gray-400 dark:text-gray-500 truncate font-mono group-open/details:hidden min-w-0">
+            {preview}
           </span>
         )}
         {action && <span className="flex-shrink-0 ml-1">{action}</span>}
