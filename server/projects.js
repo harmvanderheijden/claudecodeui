@@ -1119,6 +1119,53 @@ async function deleteSession(projectName, sessionId) {
   }
 }
 
+// Rename a session by appending a new summary entry to its JSONL file
+async function renameSession(projectName, sessionId, newSummary) {
+  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+
+  try {
+    const files = await fs.readdir(projectDir);
+    const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+
+    if (jsonlFiles.length === 0) {
+      throw new Error('No session files found for this project');
+    }
+
+    // Find the JSONL file that contains this session
+    for (const file of jsonlFiles) {
+      const jsonlFile = path.join(projectDir, file);
+      const content = await fs.readFile(jsonlFile, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+
+      const hasSession = lines.some(line => {
+        try {
+          const data = JSON.parse(line);
+          return data.sessionId === sessionId;
+        } catch {
+          return false;
+        }
+      });
+
+      if (hasSession) {
+        // Append a new summary entry — the parser takes the last one wins
+        const summaryEntry = JSON.stringify({
+          type: 'summary',
+          summary: newSummary.trim(),
+          sessionId,
+          timestamp: new Date().toISOString(),
+        });
+        await fs.appendFile(jsonlFile, '\n' + summaryEntry + '\n');
+        return true;
+      }
+    }
+
+    throw new Error(`Session ${sessionId} not found in any files`);
+  } catch (error) {
+    console.error(`Error renaming session ${sessionId} in project ${projectName}:`, error);
+    throw error;
+  }
+}
+
 // Check if a project is empty (has no sessions)
 async function isProjectEmpty(projectName) {
   try {
@@ -1813,6 +1860,7 @@ export {
   getSessionMessages,
   parseJsonlSessions,
   renameProject,
+  renameSession,
   deleteSession,
   isProjectEmpty,
   deleteProject,

@@ -401,12 +401,23 @@ export function useSidebarController({
   }, [onRefresh]);
 
   const updateSessionSummary = useCallback(
-    async (_projectName: string, _sessionId: string, _summary: string) => {
-      // Session rename endpoint is not currently exposed on the API.
-      setEditingSession(null);
-      setEditingSessionName('');
+    async (projectName: string, sessionId: string, summary: string) => {
+      try {
+        const response = await api.renameSession(projectName, sessionId, summary);
+        if (response.ok) {
+          await onRefresh();
+        } else {
+          const errorText = await response.text();
+          console.error('[Sidebar] Failed to rename session:', { status: response.status, error: errorText });
+        }
+      } catch (error) {
+        console.error('[Sidebar] Error renaming session:', error);
+      } finally {
+        setEditingSession(null);
+        setEditingSessionName('');
+      }
     },
-    [],
+    [onRefresh],
   );
 
   const collapseSidebar = useCallback(() => {
