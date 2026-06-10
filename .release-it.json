@@ -1,12 +1,13 @@
 {
   "git": {
-    "commitMessage": "Release ${version}",
+    "commitMessage": "chore(release): v${version}",
     "tagName": "v${version}",
     "requireBranch": "main",
     "requireCleanWorkingDir": true
   },
   "npm": {
-    "publish": true
+    "publish": true,
+    "publishArgs": ["--access public"]
   },
   "github": {
     "release": true,

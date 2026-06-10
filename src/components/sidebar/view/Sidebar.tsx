@@ -1,17 +1,20 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
+import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import type { Project, LLMProvider } from '../../../types/app';
+import type { MCPServerStatus, SidebarProps } from '../types/types';
+
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
-import type { Project } from '../../../types/app';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
-import type { MCPServerStatus, SidebarProps } from '../types/types';
 
 type TaskMasterSidebarContext = {
   setCurrentProject: (project: Project) => void;
@@ -26,6 +29,7 @@ function Sidebar({
   onSessionSelect,
   onNewSession,
   onSessionDelete,
+  onLoadMoreSessions,
   onProjectDelete,
   isLoading,
   loadingProgress,
@@ -38,7 +42,7 @@ function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
-  const { updateAvailable, latestVersion, currentVersion, releaseInfo } = useVersionCheck(
+  const { updateAvailable, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
     'siteboon',
     'claudecodeui',
   );
@@ -46,6 +50,7 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
+  const paletteOps = usePaletteOps();
 
   const {
     isSidebarCollapsed,
@@ -53,24 +58,34 @@ function Sidebar({
     editingProject,
     showNewProject,
     editingName,
-    loadingSessions,
     initialSessionsLoaded,
     currentTime,
     isRefreshing,
     editingSession,
     editingSessionName,
     searchFilter,
+    searchMode,
+    setSearchMode,
+    conversationResults,
+    isSearching,
+    searchProgress,
+    clearConversationResults,
     deletingProjects,
     deleteConfirmation,
     sessionDeleteConfirmation,
     showVersionModal,
     filteredProjects,
-    handleTouchClick,
+    archivedProjects,
+    archivedSessions,
+    archivedSessionsCount,
+    isArchivedSessionsLoading,
     toggleProject,
     handleSessionClick,
     toggleStarProject,
     isProjectStarred,
     getProjectSessions,
+    loadingMoreProjects,
+    loadMoreSessionsForProject,
     startEditing,
     cancelEditing,
     saveProjectName,
@@ -78,8 +93,10 @@ function Sidebar({
     confirmDeleteSession,
     requestProjectDelete,
     confirmDeleteProject,
-    loadMoreSessions,
     handleProjectSelect,
+    openArchivedSession,
+    restoreArchivedProject,
+    restoreArchivedSession,
     refreshProjects,
     updateSessionSummary,
     collapseSidebar: handleCollapseSidebar,
@@ -103,6 +120,7 @@ function Sidebar({
     onProjectSelect,
     onSessionSelect,
     onSessionDelete,
+    onLoadMoreSessions,
     onProjectDelete,
     setCurrentProject,
     setSidebarVisible: (visible) => setPreference('sidebarVisible', visible),
@@ -119,12 +137,7 @@ function Sidebar({
   }, [isPWA]);
 
   const handleProjectCreated = () => {
-    if (window.refreshProjects) {
-      void window.refreshProjects();
-      return;
-    }
-
-    window.location.reload();
+    void paletteOps.refreshProjects();
   };
 
   const projectListProps: SidebarProjectListProps = {
@@ -137,7 +150,6 @@ function Sidebar({
     expandedProjects,
     editingProject,
     editingName,
-    loadingSessions,
     initialSessionsLoaded,
     currentTime,
     editingSession,
@@ -146,6 +158,7 @@ function Sidebar({
     tasksEnabled,
     mcpServerStatus,
     getProjectSessions,
+    loadingMoreProjects,
     isProjectStarred,
     onEditingNameChange: setEditingName,
     onToggleProject: toggleProject,
@@ -159,9 +172,7 @@ function Sidebar({
     onDeleteProject: requestProjectDelete,
     onSessionSelect: handleSessionClick,
     onDeleteSession: showDeleteSessionConfirmation,
-    onLoadMoreSessions: (project) => {
-      void loadMoreSessions(project);
-    },
+    onLoadMoreSessions: loadMoreSessionsForProject,
     onNewSession,
     onEditingSessionNameChange: setEditingSessionName,
     onStartEditingSession: (sessionId, initialName) => {
@@ -172,17 +183,16 @@ function Sidebar({
       setEditingSession(null);
       setEditingSessionName('');
     },
-    onSaveEditingSession: (projectName, sessionId, summary) => {
-      void updateSessionSummary(projectName, sessionId, summary);
+    onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => {
+      void updateSessionSummary(projectName, sessionId, summary, provider);
     },
-    touchHandlerFactory: handleTouchClick,
     t,
   };
 
   return (
     <>
-      <SidebarModals
-        projects={projects}
+        <SidebarModals
+          projects={projects}
         showSettings={showSettings}
         settingsInitialTab={settingsInitialTab}
         onCloseSettings={onCloseSettings}
@@ -200,6 +210,7 @@ function Sidebar({
         releaseInfo={releaseInfo}
         currentVersion={currentVersion}
         latestVersion={latestVersion}
+        installMode={installMode}
         t={t}
       />
 
@@ -213,14 +224,65 @@ function Sidebar({
         />
       ) : (
         <>
-          <SidebarContent
+        <SidebarContent
             isPWA={isPWA}
             isMobile={isMobile}
             isLoading={isLoading}
             projects={projects}
+            archivedProjects={archivedProjects}
+            archivedSessions={archivedSessions}
+            archivedSessionsCount={archivedSessionsCount}
+            isArchivedSessionsLoading={isArchivedSessionsLoading}
             searchFilter={searchFilter}
             onSearchFilterChange={setSearchFilter}
             onClearSearchFilter={() => setSearchFilter('')}
+            searchMode={searchMode}
+            onSearchModeChange={(mode) => {
+              setSearchMode(mode);
+              if (mode === 'projects') clearConversationResults();
+            }}
+            conversationResults={conversationResults}
+            isSearching={isSearching}
+            searchProgress={searchProgress}
+            onRestoreArchivedProject={restoreArchivedProject}
+            onArchivedSessionClick={openArchivedSession}
+            onRestoreArchivedSession={restoreArchivedSession}
+            onDeleteArchivedSession={(session) => {
+              showDeleteSessionConfirmation(
+                session.projectId,
+                session.sessionId,
+                session.sessionTitle,
+                session.provider,
+                { isArchived: true },
+              );
+            }}
+            onConversationResultClick={(projectId: string | null, sessionId: string, provider: string, messageTimestamp?: string | null, messageSnippet?: string | null) => {
+              // `projectId` (DB key) is the canonical identifier post-migration.
+              // The server emits null when it can't resolve a project row for
+              // the search hit; treat that as "no project" and still navigate
+              // to the session so the user can open it from the URL.
+              const resolvedProvider = (provider || 'claude') as LLMProvider;
+              const project = projectId ? projects.find(p => p.projectId === projectId) : null;
+              const searchTarget = { __searchTargetTimestamp: messageTimestamp || null, __searchTargetSnippet: messageSnippet || null };
+              const sessionObj = {
+                id: sessionId,
+                __provider: resolvedProvider,
+                __projectId: projectId ?? undefined,
+                ...searchTarget,
+              };
+              if (project) {
+                handleProjectSelect(project);
+                const sessions = getProjectSessions(project);
+                const existing = sessions.find(s => s.id === sessionId);
+                if (existing) {
+                  handleSessionClick({ ...existing, ...searchTarget }, project.projectId);
+                } else {
+                  handleSessionClick(sessionObj, project.projectId);
+                }
+              } else {
+                handleSessionClick(sessionObj, projectId ?? '');
+              }
+            }}
             onRefresh={() => {
               void refreshProjects();
             }}
@@ -230,6 +292,7 @@ function Sidebar({
             updateAvailable={updateAvailable}
             releaseInfo={releaseInfo}
             latestVersion={latestVersion}
+            currentVersion={currentVersion}
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
             projectListProps={projectListProps}

@@ -8,6 +8,7 @@ lerna-debug.log*
 
 # Build outputs
 dist/
+dist-server/
 dist-ssr/
 build/
 out/
@@ -108,7 +109,7 @@ temp/
 .serena/
 CLAUDE.md
 .mcp.json
-
+.gemini/
 
 # Database files
 *.db
@@ -130,7 +131,14 @@ dev-debug.log
 # Task files
 tasks.json
 tasks/ 
-pdf/
 
-# Copied from node_modules by postinstall script
-public/pdfjs-wasm/
+# Translations
+!src/i18n/locales/en/tasks.json
+!src/i18n/locales/ja/tasks.json
+!src/i18n/locales/ru/tasks.json
+!src/i18n/locales/de/tasks.json
+!src/i18n/locales/tr/tasks.json
+!src/i18n/locales/it/tasks.json
+
+# Git worktrees
+.worktrees/

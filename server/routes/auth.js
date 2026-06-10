@@ -1,9 +1,11 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
-import { userDb, db } from '../database/db.js';
+import { userDb } from '../modules/database/index.js';
+import { getConnection } from '../modules/database/connection.js';
 import { generateToken, authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
+const db = getConnection();
 
 // Check auth status and setup requirements
 router.get('/status', async (req, res) => {
@@ -53,11 +55,11 @@ router.post('/register', async (req, res) => {
       // Generate token
       const token = generateToken(user);
       
-      // Update last login
+      db.prepare('COMMIT').run();
+
+      // Update last login (non-fatal, outside transaction)
       userDb.updateLastLogin(user.id);
 
-      db.prepare('COMMIT').run();
-      
       res.json({
         success: true,
         user: { id: user.id, username: user.username },

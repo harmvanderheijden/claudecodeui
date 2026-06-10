@@ -17,14 +17,25 @@ import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import { CLAUDE_MODELS } from '../shared/modelConstants.js';
+import { CLAUDE_FALLBACK_MODELS } from './modules/providers/list/claude/claude-models.provider.js';
+import { providerModelsService } from './modules/providers/services/provider-models.service.js';
+import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
+import {
+  createNotificationEvent,
+  notifyRunFailed,
+  notifyRunStopped,
+  notifyUserIfEnabled
+} from './services/notification-orchestrator.js';
+import { sessionsService } from './modules/providers/services/sessions.service.js';
+import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
-const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion']);
+const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') {
@@ -34,7 +45,7 @@ function createRequestId() {
 }
 
 function waitForToolApproval(requestId, options = {}) {
-  const { timeoutMs = TOOL_APPROVAL_TIMEOUT_MS, signal, onCancel } = options;
+  const { timeoutMs = TOOL_APPROVAL_TIMEOUT_MS, signal, onCancel, metadata } = options;
 
   return new Promise(resolve => {
     let settled = false;
@@ -78,9 +89,14 @@ function waitForToolApproval(requestId, options = {}) {
       signal.addEventListener('abort', abortHandler, { once: true });
     }
 
-    pendingToolApprovals.set(requestId, (decision) => {
+    const resolver = (decision) => {
       finalize(decision);
-    });
+    };
+    // Attach metadata for getPendingApprovalsForSession lookup
+    if (metadata) {
+      Object.assign(resolver, metadata);
+    }
+    pendingToolApprovals.set(requestId, resolver);
   });
 }
 
@@ -131,9 +147,17 @@ function matchesToolPermission(entry, toolName, input) {
  * @returns {Object} SDK-compatible options
  */
 function mapCliOptionsToSDK(options = {}) {
-  const { sessionId, cwd, toolsSettings, permissionMode, images } = options;
+  const { sessionId, cwd, toolsSettings, permissionMode } = options;
 
   const sdkOptions = {};
+
+  // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
+  // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
+  sdkOptions.env = { ...process.env };
+
+  // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
+  // which does not reliably follow npm's shell wrappers like cross-spawn does.
+  sdkOptions.pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH);
 
   // Map working directory
   if (cwd) {
@@ -156,7 +180,6 @@ function mapCliOptionsToSDK(options = {}) {
   if (settings.skipPermissions && permissionMode !== 'plan') {
     // When skipping permissions, use bypassPermissions mode
     sdkOptions.permissionMode = 'bypassPermissions';
-    sdkOptions.allowDangerouslySkipPermissions = true;
   }
 
   let allowedTools = [...(settings.allowedTools || [])];
@@ -181,9 +204,9 @@ function mapCliOptionsToSDK(options = {}) {
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
   // Map model (default to sonnet)
-  // Valid models: sonnet, opus, haiku, opusplan, sonnet[1m]
-  sdkOptions.model = options.model || CLAUDE_MODELS.DEFAULT;
-  console.log(`Using model: ${sdkOptions.model}`);
+  // Valid models: sonnet, opus, haiku, opusplan, sonnet[1m], fable
+  sdkOptions.model = options.model || CLAUDE_FALLBACK_MODELS.DEFAULT;
+  // Model logged at query start below
 
   // Map system prompt configuration
   sdkOptions.systemPrompt = {
@@ -210,13 +233,14 @@ function mapCliOptionsToSDK(options = {}) {
  * @param {Array<string>} tempImagePaths - Temp image file paths for cleanup
  * @param {string} tempDir - Temp directory for cleanup
  */
-function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null) {
+function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null) {
   activeSessions.set(sessionId, {
     instance: queryInstance,
     startTime: Date.now(),
     status: 'active',
     tempImagePaths,
-    tempDir
+    tempDir,
+    writer
   });
 }
 
@@ -261,44 +285,75 @@ function transformMessage(sdkMessage) {
   return sdkMessage;
 }
 
+function readNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 /**
- * Extracts token usage from SDK result messages
- * @param {Object} resultMessage - SDK result message
+ * Extracts token usage from SDK messages.
+ * Prefers per-step `message.usage` (Claude message payload), then falls back
+ * to result-level usage/modelUsage for compatibility across SDK versions.
+ * @param {Object} sdkMessage - SDK stream message
  * @returns {Object|null} Token budget object or null
  */
-function extractTokenBudget(resultMessage) {
-  if (resultMessage.type !== 'result' || !resultMessage.modelUsage) {
+function extractTokenBudget(sdkMessage) {
+  if (!sdkMessage || typeof sdkMessage !== 'object') {
     return null;
   }
 
-  // Get the first model's usage data
-  const modelKey = Object.keys(resultMessage.modelUsage)[0];
-  const modelData = resultMessage.modelUsage[modelKey];
+  const messageUsage = sdkMessage.message?.usage || sdkMessage.usage;
+  if (messageUsage && typeof messageUsage === 'object') {
+    const directInputTokens = readNumber(messageUsage.input_tokens ?? messageUsage.inputTokens);
+    const cacheCreationTokens = readNumber(messageUsage.cache_creation_input_tokens ?? messageUsage.cacheCreationInputTokens ?? messageUsage.cacheCreationTokens);
+    const cacheReadTokens = readNumber(messageUsage.cache_read_input_tokens ?? messageUsage.cacheReadInputTokens ?? messageUsage.cacheReadTokens);
+    const cacheTokens = cacheCreationTokens + cacheReadTokens;
+    const inputTokens = directInputTokens + cacheTokens;
+    const outputTokens = readNumber(messageUsage.output_tokens ?? messageUsage.outputTokens);
+    const totalUsed = inputTokens + outputTokens;
+    const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
 
-  if (!modelData) {
+    return {
+      used: totalUsed,
+      total: contextWindow,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheCreationTokens,
+      cacheTokens,
+      breakdown: {
+        input: inputTokens,
+        output: outputTokens,
+      },
+    };
+  }
+
+  if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== 'object') {
     return null;
   }
 
-  // SDK v0.2 provides per-request tokens directly (no cumulative fields)
-  const inputTokens = modelData.cumulativeInputTokens || modelData.inputTokens || 0;
-  const outputTokens = modelData.cumulativeOutputTokens || modelData.outputTokens || 0;
-  const cacheReadTokens = modelData.cumulativeCacheReadInputTokens || modelData.cacheReadInputTokens || 0;
-  const cacheCreationTokens = modelData.cumulativeCacheCreationInputTokens || modelData.cacheCreationInputTokens || 0;
+  // Fallback for older SDK messages with only modelUsage
+  const modelKey = Object.keys(sdkMessage.modelUsage)[0];
+  const modelData = sdkMessage.modelUsage[modelKey];
 
-  // Total used = input + output + cache tokens
-  const totalUsed = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
+  if (!modelData || typeof modelData !== 'object') {
+    return null;
+  }
 
-  // Prefer contextWindow from modelUsage (SDK v0.2 provides this per-model),
-  // then fall back to env config, then default
-  const contextWindow = modelData.contextWindow
-    || parseInt(process.env.CONTEXT_WINDOW)
-    || 160000;
-
-  console.log(`Token calculation: input=${inputTokens}, output=${outputTokens}, cache=${cacheReadTokens + cacheCreationTokens}, total=${totalUsed}/${contextWindow}`);
+  const inputTokens = readNumber(modelData.cumulativeInputTokens ?? modelData.inputTokens);
+  const outputTokens = readNumber(modelData.cumulativeOutputTokens ?? modelData.outputTokens);
+  const totalUsed = inputTokens + outputTokens;
+  const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
 
   return {
     used: totalUsed,
-    total: contextWindow
+    total: contextWindow,
+    inputTokens,
+    outputTokens,
+    breakdown: {
+      input: inputTokens,
+      output: outputTokens,
+    },
   };
 }
 
@@ -350,7 +405,7 @@ async function handleImages(command, images, cwd) {
       modifiedCommand = command + imageNote;
     }
 
-    console.log(`Processed ${tempImagePaths.length} images to temp directory: ${tempDir}`);
+    // Images processed
     return { modifiedCommand, tempImagePaths, tempDir };
   } catch (error) {
     console.error('Error processing images for SDK:', error);
@@ -383,7 +438,7 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
       );
     }
 
-    console.log(`Cleaned up ${tempImagePaths.length} temp image files`);
+    // Temp files cleaned
   } catch (error) {
     console.error('Error during temp file cleanup:', error);
   }
@@ -403,7 +458,7 @@ async function loadMcpConfig(cwd) {
       await fs.access(claudeConfigPath);
     } catch (error) {
       // File doesn't exist, return null
-      console.log('No ~/.claude.json found, proceeding without MCP servers');
+      // No config file
       return null;
     }
 
@@ -423,7 +478,7 @@ async function loadMcpConfig(cwd) {
     // Add global MCP servers
     if (claudeConfig.mcpServers && typeof claudeConfig.mcpServers === 'object') {
       mcpServers = { ...claudeConfig.mcpServers };
-      console.log(`Loaded ${Object.keys(mcpServers).length} global MCP servers`);
+      // Global MCP servers loaded
     }
 
     // Add/override with project-specific MCP servers
@@ -431,17 +486,14 @@ async function loadMcpConfig(cwd) {
       const projectConfig = claudeConfig.claudeProjects[cwd];
       if (projectConfig && projectConfig.mcpServers && typeof projectConfig.mcpServers === 'object') {
         mcpServers = { ...mcpServers, ...projectConfig.mcpServers };
-        console.log(`Loaded ${Object.keys(projectConfig.mcpServers).length} project-specific MCP servers`);
+        // Project MCP servers merged
       }
     }
 
     // Return null if no servers found
     if (Object.keys(mcpServers).length === 0) {
-      console.log('No MCP servers configured');
       return null;
     }
-
-    console.log(`Total MCP servers loaded: ${Object.keys(mcpServers).length}`);
     return mcpServers;
   } catch (error) {
     console.error('Error loading MCP config:', error.message);
@@ -457,44 +509,72 @@ async function loadMcpConfig(cwd) {
  * @returns {Promise<void>}
  */
 async function queryClaudeSDK(command, options = {}, ws) {
-  const startTime = Date.now();
-  console.log(`[TIMING] queryClaudeSDK started at ${new Date().toISOString()}`);
-
-  const { sessionId } = options;
+  const { sessionId, sessionSummary } = options;
   let capturedSessionId = sessionId;
   let sessionCreatedSent = false;
   let tempImagePaths = [];
   let tempDir = null;
-  let firstMessageReceived = false;
+
+  const emitNotification = (event) => {
+    notifyUserIfEnabled({
+      userId: ws?.userId || null,
+      writer: ws,
+      event
+    });
+  };
 
   try {
+    const resolvedModel = await providerModelsService.resolveResumeModel(
+      'claude',
+      sessionId,
+      options.model,
+    );
+
     // Map CLI options to SDK format
-    const sdkOptions = mapCliOptionsToSDK(options);
-    console.log(`[TIMING] Options mapped (${Date.now() - startTime}ms)`);
+    const sdkOptions = mapCliOptionsToSDK({
+      ...options,
+      model: resolvedModel || options.model,
+    });
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
-    console.log(`[TIMING] MCP config loaded (${Date.now() - startTime}ms)`);
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;
     }
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
-    console.log(`[TIMING] Images handled (${Date.now() - startTime}ms)`);
     const finalCommand = imageResult.modifiedCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
 
-    // SDK v0.2+ spawns a subprocess; CLAUDECODE env var triggers nesting detection.
-    // Provide a clean env without it so the subprocess can start normally.
-    const cleanEnv = { ...process.env };
-    delete cleanEnv.CLAUDECODE;
-    delete cleanEnv.CLAUDE_CODE_ENTRYPOINT;
-    delete cleanEnv.CLAUDE_AGENT_SDK_VERSION;
-    sdkOptions.env = cleanEnv;
+    sdkOptions.hooks = {
+      Notification: [{
+        matcher: '',
+        hooks: [async (input) => {
+          const message = typeof input?.message === 'string' ? input.message : 'Claude requires your attention.';
+          emitNotification(createNotificationEvent({
+            provider: 'claude',
+            sessionId: capturedSessionId || sessionId || null,
+            kind: 'action_required',
+            code: 'agent.notification',
+            meta: { message, sessionName: sessionSummary },
+            severity: 'warning',
+            requiresUserAction: true,
+            dedupeKey: `claude:hook:notification:${capturedSessionId || sessionId || 'none'}:${message}`
+          }));
+          return {};
+        }]
+      }]
+    };
 
-    sdkOptions.canUseTool = async (toolName, input, sdkContext) => {
+    // Caveat: in 'auto' and 'bypassPermissions' modes the SDK resolves approval
+    // at the permission-mode step and skips this callback, so interactive tools
+    // (AskUserQuestion, ExitPlanMode) won't reach the UI — the classifier/bypass
+    // auto-approves them and the model acts on a generated answer. Move these
+    // tools to a PreToolUse hook (runs before the mode check) if we need them
+    // to work in those modes.
+    sdkOptions.canUseTool = async (toolName, input, context) => {
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
@@ -518,28 +598,29 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }
 
       const requestId = createRequestId();
-      ws.send({
-        type: 'claude-permission-request',
-        requestId,
-        toolName,
-        input,
-        // Forward SDK v0.2 context fields to the frontend
-        suggestions: sdkContext?.suggestions,
-        decisionReason: sdkContext?.decisionReason,
-        toolUseID: sdkContext?.toolUseID,
-        sessionId: capturedSessionId || sessionId || null
-      });
+      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      emitNotification(createNotificationEvent({
+        provider: 'claude',
+        sessionId: capturedSessionId || sessionId || null,
+        kind: 'action_required',
+        code: 'permission.required',
+        meta: { toolName, sessionName: sessionSummary },
+        severity: 'warning',
+        requiresUserAction: true,
+        dedupeKey: `claude:permission:${capturedSessionId || sessionId || 'none'}:${requestId}`
+      }));
 
       const decision = await waitForToolApproval(requestId, {
         timeoutMs: requiresInteraction ? 0 : undefined,
-        signal: sdkContext?.signal,
+        signal: context?.signal,
+        metadata: {
+          _sessionId: capturedSessionId || sessionId || null,
+          _toolName: toolName,
+          _input: input,
+          _receivedAt: new Date(),
+        },
         onCancel: (reason) => {
-          ws.send({
-            type: 'claude-permission-cancelled',
-            requestId,
-            reason,
-            sessionId: capturedSessionId || sessionId || null
-          });
+          ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId, reason, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
       });
       if (!decision) {
@@ -551,17 +632,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }
 
       if (decision.allow) {
-        // Build updatedPermissions from rememberEntry (backward-compatible with UI)
-        const result = { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
         if (decision.rememberEntry && typeof decision.rememberEntry === 'string') {
-          // Use SDK v0.2 updatedPermissions format to persist the allow rule
-          result.updatedPermissions = [{
-            type: 'addRules',
-            rules: [{ toolName: decision.rememberEntry }],
-            behavior: 'allow',
-            destination: 'session'
-          }];
-          // Also update local state for this session
           if (!sdkOptions.allowedTools.includes(decision.rememberEntry)) {
             sdkOptions.allowedTools.push(decision.rememberEntry);
           }
@@ -569,7 +640,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
             sdkOptions.disallowedTools = sdkOptions.disallowedTools.filter(entry => entry !== decision.rememberEntry);
           }
         }
-        return result;
+        return { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
       }
 
       return { behavior: 'deny', message: decision.message ?? 'User denied tool use' };
@@ -579,11 +650,22 @@ async function queryClaudeSDK(command, options = {}, ws) {
     const prevStreamTimeout = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
     process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = '300000';
 
-    const queryInstance = query({
-      prompt: finalCommand,
-      options: sdkOptions
-    });
-    console.log(`[TIMING] Query instance created (${Date.now() - startTime}ms)`);
+    let queryInstance;
+    try {
+      queryInstance = query({
+        prompt: finalCommand,
+        options: sdkOptions
+      });
+    } catch (hookError) {
+      // Older/newer SDK versions may not accept hook shapes yet.
+      // Keep notification behavior operational via runtime events even if hook registration fails.
+      console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
+      delete sdkOptions.hooks;
+      queryInstance = query({
+        prompt: finalCommand,
+        options: sdkOptions
+      });
+    }
 
     // Restore immediately — Query constructor already captured the value
     if (prevStreamTimeout !== undefined) {
@@ -594,21 +676,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Track the query instance for abort capability
     if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir);
+      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
     }
 
     // Process streaming messages
-    console.log(`[TIMING] Starting async generator loop for session: ${capturedSessionId || 'NEW'} (${Date.now() - startTime}ms)`);
+    console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
     for await (const message of queryInstance) {
-      if (!firstMessageReceived) {
-        console.log(`[TIMING] First message received from SDK (${Date.now() - startTime}ms)`);
-        firstMessageReceived = true;
-      }
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir);
+        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
 
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
@@ -618,35 +696,30 @@ async function queryClaudeSDK(command, options = {}, ws) {
         // Send session-created event only once for new sessions
         if (!sessionId && !sessionCreatedSent) {
           sessionCreatedSent = true;
-          ws.send({
-            type: 'session-created',
-            sessionId: capturedSessionId
-          });
+          ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, sessionId: capturedSessionId, provider: 'claude' }));
         }
+      } else {
+        // session_id already captured
       }
 
-      // Transform and send message to WebSocket
+      // Transform and normalize message via adapter
       const transformedMessage = transformMessage(message);
+      const sid = capturedSessionId || sessionId || null;
 
-      console.log(`[TIMING] Sending message to WS (${Date.now() - startTime}ms), type: ${transformedMessage.type}`);
-
-      ws.send({
-        type: 'claude-response',
-        data: transformedMessage,
-        sessionId: capturedSessionId || sessionId || null
-      });
-
-      // Extract and send token budget updates from result messages
-      if (message.type === 'result') {
-        const tokenBudget = extractTokenBudget(message);
-        if (tokenBudget) {
-          console.log('Token budget from modelUsage:', tokenBudget);
-          ws.send({
-            type: 'token-budget',
-            data: tokenBudget,
-            sessionId: capturedSessionId || sessionId || null
-          });
+      // Use adapter to normalize SDK events into NormalizedMessage[]
+      const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
+      for (const msg of normalized) {
+        // Preserve parentToolUseId from SDK wrapper for subagent tool grouping
+        if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
+          msg.parentToolUseId = transformedMessage.parentToolUseId;
         }
+        ws.send(msg);
+      }
+
+      // Extract and send token budget updates from assistant/result usage payloads
+      const tokenBudgetData = extractTokenBudget(message);
+      if (tokenBudgetData) {
+        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       }
     }
 
@@ -659,14 +732,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
     await cleanupTempFiles(tempImagePaths, tempDir);
 
     // Send completion event
-    console.log(`[TIMING] Streaming complete, sending claude-complete event (${Date.now() - startTime}ms)`);
-    ws.send({
-      type: 'claude-complete',
-      sessionId: capturedSessionId,
-      exitCode: 0,
-      isNewSession: !sessionId && !!command
+    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, isNewSession: !sessionId && !!command, sessionId: capturedSessionId, provider: 'claude' }));
+    notifyRunStopped({
+      userId: ws?.userId || null,
+      provider: 'claude',
+      sessionId: capturedSessionId || sessionId || null,
+      sessionName: sessionSummary,
+      stopReason: 'completed'
     });
-    console.log(`[TIMING] claude-complete event sent, total time: ${Date.now() - startTime}ms`);
+    // Complete
 
   } catch (error) {
     console.error('SDK query error:', error);
@@ -679,14 +753,21 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
 
-    // Send error to WebSocket
-    ws.send({
-      type: 'claude-error',
-      error: error.message,
-      sessionId: capturedSessionId || sessionId || null
-    });
+    // Check if Claude CLI is installed for a clearer error message
+    const installed = await providerAuthService.isProviderInstalled('claude');
+    const errorContent = !installed
+      ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
+      : error.message;
 
-    throw error;
+    // Send error to WebSocket
+    ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+    notifyRunFailed({
+      userId: ws?.userId || null,
+      provider: 'claude',
+      sessionId: capturedSessionId || sessionId || null,
+      sessionName: sessionSummary,
+      error
+    });
   }
 }
 
@@ -743,11 +824,50 @@ function getActiveClaudeSDKSessions() {
   return getAllSessions();
 }
 
+/**
+ * Get pending tool approvals for a specific session.
+ * @param {string} sessionId - The session ID
+ * @returns {Array} Array of pending permission request objects
+ */
+function getPendingApprovalsForSession(sessionId) {
+  const pending = [];
+  for (const [requestId, resolver] of pendingToolApprovals.entries()) {
+    if (resolver._sessionId === sessionId) {
+      pending.push({
+        requestId,
+        toolName: resolver._toolName || 'UnknownTool',
+        input: resolver._input,
+        context: resolver._context,
+        sessionId,
+        receivedAt: resolver._receivedAt || new Date(),
+      });
+    }
+  }
+  return pending;
+}
+
+/**
+ * Reconnect a session's WebSocketWriter to a new raw WebSocket.
+ * Called when client reconnects (e.g. page refresh) while SDK is still running.
+ * @param {string} sessionId - The session ID
+ * @param {Object} newRawWs - The new raw WebSocket connection
+ * @returns {boolean} True if writer was successfully reconnected
+ */
+function reconnectSessionWriter(sessionId, newRawWs) {
+  const session = getSession(sessionId);
+  if (!session?.writer?.updateWebSocket) return false;
+  session.writer.updateWebSocket(newRawWs);
+  console.log(`[RECONNECT] Writer swapped for session ${sessionId}`);
+  return true;
+}
+
 // Export public API
 export {
   queryClaudeSDK,
   abortClaudeSDKSession,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
-  resolveToolApproval
+  resolveToolApproval,
+  getPendingApprovalsForSession,
+  reconnectSessionWriter
 };

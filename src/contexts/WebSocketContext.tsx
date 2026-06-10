@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { useAuth } from './AuthContext';
+import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 
 type WebSocketContextType = {
@@ -29,14 +29,19 @@ const buildWebSocketUrl = (token: string | null) => {
 const useWebSocketProviderState = (): WebSocketContextType => {
   const wsRef = useRef<WebSocket | null>(null);
   const unmountedRef = useRef(false); // Track if component is unmounted
+  const hasConnectedRef = useRef(false); // Track if we've ever connected (to detect reconnects)
   const [latestMessage, setLatestMessage] = useState<any>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { token } = useAuth();
 
   useEffect(() => {
+    // The cleanup below sets unmountedRef = true. Without this reset, every
+    // re-run of the effect (e.g. on token refresh) would short-circuit connect()
+    // at its unmounted guard and leave the socket permanently disconnected.
+    unmountedRef.current = false;
     connect();
-    
+
     return () => {
       unmountedRef.current = true;
       if (reconnectTimeoutRef.current) {
@@ -61,6 +66,11 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       websocket.onopen = () => {
         setIsConnected(true);
         wsRef.current = websocket;
+        if (hasConnectedRef.current) {
+          // This is a reconnect — signal so components can catch up on missed messages
+          setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
+        }
+        hasConnectedRef.current = true;
       };
 
       websocket.onmessage = (event) => {

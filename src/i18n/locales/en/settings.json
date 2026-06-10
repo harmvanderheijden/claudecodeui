@@ -55,8 +55,7 @@
       "appearance": "Appearance",
       "toolDisplay": "Tool Display",
       "viewOptions": "View Options",
-      "inputSettings": "Input Settings",
-      "whisperDictation": "Whisper Dictation"
+      "inputSettings": "Input Settings"
     },
     "darkMode": "Dark Mode",
     "autoExpandTools": "Auto-expand tools",
@@ -71,24 +70,58 @@
       "openPanel": "Open settings panel",
       "draggingStatus": "Dragging...",
       "toggleAndMove": "Click to toggle, drag to move"
-    },
-    "whisper": {
-      "modes": {
-        "default": "Default Mode",
-        "defaultDescription": "Direct transcription of your speech",
-        "prompt": "Prompt Enhancement",
-        "promptDescription": "Transform rough ideas into clear, detailed AI prompts",
-        "vibe": "Vibe Mode",
-        "vibeDescription": "Format ideas as clear agent instructions with details"
-      }
+    }
+  },
+  "terminalShortcuts": {
+    "title": "Terminal Shortcuts",
+    "sectionKeys": "Keys",
+    "sectionNavigation": "Navigation",
+    "escape": "Escape",
+    "tab": "Tab",
+    "shiftTab": "Shift+Tab",
+    "arrowUp": "Arrow Up",
+    "arrowDown": "Arrow Down",
+    "scrollDown": "Scroll Down",
+    "handle": {
+      "closePanel": "Close shortcuts panel",
+      "openPanel": "Open shortcuts panel"
     }
   },
   "mainTabs": {
+    "label": "Settings",
     "agents": "Agents",
     "appearance": "Appearance",
     "git": "Git",
     "apiTokens": "API & Tokens",
-    "tasks": "Tasks"
+    "tasks": "Tasks",
+    "notifications": "Notifications",
+    "plugins": "Plugins",
+    "about": "About"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "description": "Control which notification events you receive.",
+    "webPush": {
+      "title": "Web Push Notifications",
+      "enable": "Enable Push Notifications",
+      "disable": "Disable Push Notifications",
+      "enabled": "Push notifications are enabled",
+      "loading": "Updating...",
+      "unsupported": "Push notifications are not supported in this browser.",
+      "denied": "Push notifications are blocked. Please allow them in your browser settings."
+    },
+    "sound": {
+      "title": "Sound",
+      "description": "Play a short tone when a chat run finishes.",
+      "enabled": "Enabled",
+      "test": "Test sound"
+    },
+    "events": {
+      "title": "Event Types",
+      "actionRequired": "Action required",
+      "stop": "Run stopped",
+      "error": "Run failed"
+    }
   },
   "appearanceSettings": {
     "darkMode": {
@@ -292,6 +325,12 @@
       },
       "codex": {
         "description": "OpenAI Codex AI assistant"
+      },
+      "gemini": {
+        "description": "Google Gemini AI assistant"
+      },
+      "opencode": {
+        "description": "OpenCode CLI assistant"
       }
     },
     "connectionStatus": "Connection Status",
@@ -386,7 +425,8 @@
     "description": {
       "claude": "Model Context Protocol servers provide additional tools and data sources to Claude",
       "cursor": "Model Context Protocol servers provide additional tools and data sources to Cursor",
-      "codex": "Model Context Protocol servers provide additional tools and data sources to Codex"
+      "codex": "Model Context Protocol servers provide additional tools and data sources to Codex",
+      "opencode": "Model Context Protocol servers provide additional tools and data sources to OpenCode"
     },
     "addButton": "Add MCP Server",
     "empty": "No MCP servers configured",
@@ -414,5 +454,71 @@
       "title": "About Codex MCP",
       "description": "Codex supports stdio-based MCP servers. You can add servers that extend Codex's capabilities with additional tools and resources."
     }
+  },
+  "pluginSettings": {
+    "title": "Plugins",
+    "description": "Extend the interface with custom plugins. Install from git or drop a folder in ~/.claude-code-ui/plugins/",
+    "installPlaceholder": "https://github.com/user/my-plugin",
+    "installButton": "Install",
+    "installing": "Installing…",
+    "securityWarning": "Only install plugins whose source code you have reviewed or from authors you trust.",
+    "scanningPlugins": "Scanning plugins…",
+    "noPluginsInstalled": "No plugins installed",
+    "pullLatest": "Pull latest from git",
+    "noGitRemote": "No git remote — update not available",
+    "uninstallPlugin": "Uninstall plugin",
+    "confirmUninstall": "Click again to confirm",
+    "confirmUninstallMessage": "Remove {{name}}? This cannot be undone.",
+    "cancel": "Cancel",
+    "remove": "Remove",
+    "updateFailed": "Update failed",
+    "installFailed": "Installation failed",
+    "uninstallFailed": "Uninstall failed",
+    "toggleFailed": "Toggle failed",
+    "starterPluginLabel": "Starter Plugin",
+    "starter": "Starter",
+    "docs": "Docs",
+    "sections": {
+      "officialTitle": "Official Plugins",
+      "officialDescription": "Maintained by the CloudCLI team and ready for direct install.",
+      "unofficialTitle": "Other Plugins",
+      "unofficialDescription": "Unofficial plugins and integrations from other users. Review the source before installing."
+    },
+    "starterPlugin": {
+      "name": "Project Stats",
+      "badge": "starter",
+      "description": "File counts, lines of code, file-type breakdown, and recent activity for your project.",
+      "install": "Install"
+    },
+    "terminalPlugin": {
+      "name": "Terminal",
+      "badge": "official",
+      "description": "Integrated terminal with full shell access directly within the interface.",
+      "install": "Install"
+    },
+    "scheduledPromptPlugin": {
+      "name": "Scheduled Prompts",
+      "badge": "unofficial",
+      "description": "Schedule workspace prompts, review run history, and manage recurring local tasks.",
+      "install": "Install"
+    },
+    "claudeWatchPlugin": {
+      "name": "Claude Watch",
+      "badge": "unofficial",
+      "description": "Watch long-running Claude Code sessions for hangs and expose process controls.",
+      "install": "Install"
+    },
+    "prismCloudCLI": {
+      "name": "PRISM CloudCLI",
+      "badge": "unofficial",
+      "description": "Session intelligence for Claude Code, inside CloudCLI. See why your sessions are burning tokens without leaving the browser.",
+      "install": "Install"
+    },
+    "morePlugins": "More",
+    "enable": "Enable",
+    "disable": "Disable",
+    "installAriaLabel": "Plugin git repository URL",
+    "tab": "tab",
+    "runningStatus": "running"
   }
 }

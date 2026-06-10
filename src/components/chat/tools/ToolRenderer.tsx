@@ -1,8 +1,13 @@
 import React, { memo, useMemo, useCallback } from 'react';
-import { getToolConfig } from './configs/toolConfigs';
-import { OneLineDisplay, CollapsibleDisplay, DiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
+
 import type { Project } from '../../../types/app';
 import type { SubagentChildTool } from '../types/types';
+
+import { getToolConfig } from './configs/toolConfigs';
+import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
+import { PlanDisplay } from './components/PlanDisplay';
+import { ToolStatusBadge } from './components/ToolStatusBadge';
+import type { ToolStatus } from './components/ToolStatusBadge';
 
 type DiffLine = {
   type: string;
@@ -36,78 +41,30 @@ function getToolCategory(toolName: string): string {
   if (toolName === 'Bash') return 'bash';
   if (['TodoWrite', 'TodoRead'].includes(toolName)) return 'todo';
   if (['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolName)) return 'task';
-  if (toolName === 'Task') return 'agent';  // Subagent task
+  if (toolName === 'Task') return 'agent';
   if (toolName === 'exit_plan_mode' || toolName === 'ExitPlanMode') return 'plan';
   if (toolName === 'AskUserQuestion') return 'question';
   return 'default';
 }
 
-/**
- * Generate a compact one-line preview string for collapsible tool sections.
- * For objects, renders as { key: value, key2: value2 }.
- * For strings, takes the first line / first ~120 chars.
- */
-function generatePreview(data: any): string {
-  if (data == null) return '';
+// Exact denial messages from server/claude-sdk.js — other providers can't reliably signal denial
+const CLAUDE_DENIAL_MESSAGES = [
+  'user denied tool use',
+  'tool disallowed by settings',
+  'permission request timed out',
+  'permission request cancelled',
+];
 
-  if (typeof data === 'object' && !Array.isArray(data)) {
-    const entries = Object.entries(data);
-    if (entries.length === 0) return '{}';
-    const parts = entries.map(([key, val]) => {
-      let v: string;
-      if (val == null) v = 'null';
-      else if (typeof val === 'string') v = val.length > 40 ? val.slice(0, 40) + '\u2026' : val;
-      else if (typeof val === 'object') v = Array.isArray(val) ? `[${val.length}]` : '{...}';
-      else v = String(val);
-      return `${key}: ${v}`;
-    });
-    return `{ ${parts.join(', ')} }`;
-  }
-
-  if (Array.isArray(data)) {
-    return `[${data.length} item${data.length !== 1 ? 's' : ''}]`;
-  }
-
-  const str = String(data);
-  const firstLine = str.split('\n')[0];
-  return firstLine.length > 120 ? firstLine.slice(0, 120) + '\u2026' : firstLine;
-}
-
-/**
- * Generate a preview for tool result content.
- * Handles the various shapes results can take.
- */
-function generateResultPreview(data: any): string {
-  if (data == null) return '';
-
-  // Tool results often have a { content, isError } shape
-  const content = data?.content ?? data;
-
-  if (typeof content === 'string') {
-    const trimmed = content.trim();
-    if (!trimmed) return '';
-    const firstLine = trimmed.split('\n')[0];
-    return firstLine.length > 120 ? firstLine.slice(0, 120) + '\u2026' : firstLine;
-  }
-
-  if (Array.isArray(content)) {
-    // Array of content blocks (Anthropic format)
-    const texts = content
-      .filter((c: any) => c.type === 'text' && c.text)
-      .map((c: any) => c.text.trim());
-    if (texts.length > 0) {
-      const joined = texts.join(' ');
-      const firstLine = joined.split('\n')[0];
-      return firstLine.length > 120 ? firstLine.slice(0, 120) + '\u2026' : firstLine;
+function deriveToolStatus(toolResult: any): ToolStatus {
+  if (!toolResult) return 'running';
+  if (toolResult.isError) {
+    const content = String(toolResult.content || '').toLowerCase().trim();
+    if (CLAUDE_DENIAL_MESSAGES.some((msg) => content.includes(msg))) {
+      return 'denied';
     }
-    return `[${content.length} item${content.length !== 1 ? 's' : ''}]`;
+    return 'error';
   }
-
-  if (typeof content === 'object') {
-    return generatePreview(content);
-  }
-
-  return String(content).slice(0, 120);
+  return 'completed';
 }
 
 /**
@@ -129,20 +86,6 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   isSubagentContainer,
   subagentState
 }) => {
-  // Route subagent containers to dedicated component
-  if (isSubagentContainer && subagentState) {
-    if (mode === 'result') {
-      return null;
-    }
-    return (
-      <SubagentContainer
-        toolInput={toolInput}
-        toolResult={toolResult}
-        subagentState={subagentState}
-      />
-    );
-  }
-
   const config = getToolConfig(toolName);
   const displayConfig: any = mode === 'input' ? config.input : config.result;
 
@@ -155,6 +98,12 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
     }
   }, [mode, toolInput, toolResult]);
 
+  // Only derive and show status badge on input renders
+  const toolStatus = useMemo(
+    () => mode === 'input' ? deriveToolStatus(toolResult) : undefined,
+    [mode, toolResult],
+  );
+
   const handleAction = useCallback(() => {
     if (displayConfig?.action === 'open-file' && onFileOpen) {
       const value = displayConfig.getValue?.(parsedData) || '';
@@ -162,7 +111,18 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
     }
   }, [displayConfig, parsedData, onFileOpen]);
 
-  // Keep hooks above this guard so hook call order stays stable across renders.
+  // Route subagent containers to dedicated component (after hooks to satisfy Rules of Hooks)
+  if (isSubagentContainer && subagentState) {
+    if (mode === 'result') return null;
+    return (
+      <SubagentContainer
+        toolInput={toolInput}
+        toolResult={toolResult}
+        subagentState={subagentState}
+      />
+    );
+  }
+
   if (!displayConfig) return null;
 
   if (displayConfig.type === 'one-line') {
@@ -184,6 +144,34 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         wrapText={displayConfig.wrapText}
         colorScheme={displayConfig.colorScheme}
         resultId={mode === 'input' ? `tool-result-${toolId}` : undefined}
+        status={toolStatus !== 'completed' ? toolStatus : undefined}
+      />
+    );
+  }
+
+  if (displayConfig.type === 'plan') {
+    const title = typeof displayConfig.title === 'function'
+      ? displayConfig.title(parsedData)
+      : displayConfig.title || 'Plan';
+
+    const contentProps = displayConfig.getContentProps?.(parsedData, {
+      selectedProject,
+      createDiff,
+      onFileOpen
+    }) || {};
+
+    const isStreaming = mode === 'input' && !toolResult;
+
+    return (
+      <PlanDisplay
+        title={title}
+        content={contentProps.content || ''}
+        defaultOpen={displayConfig.defaultOpen ?? autoExpandTools}
+        isStreaming={isStreaming}
+        showRawParameters={mode === 'input' && showRawParameters}
+        rawContent={rawToolInput}
+        toolName={toolName}
+        toolId={toolId}
       />
     );
   }
@@ -203,14 +191,13 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
       onFileOpen
     }) || {};
 
-    // Build the content component based on contentType
     let contentComponent: React.ReactNode = null;
 
     switch (displayConfig.contentType) {
       case 'diff':
         if (createDiff) {
           contentComponent = (
-            <DiffViewer
+            <ToolDiffViewer
               {...contentProps}
               createDiff={createDiff}
               onFileClick={() => onFileOpen?.(contentProps.filePath)}
@@ -270,7 +257,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         const msg = displayConfig.getMessage?.(parsedData) || 'Success';
         contentComponent = (
           <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
             {msg}
@@ -280,7 +267,6 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
       }
     }
 
-    // For edit tools, make the title (filename) clickable to open the file
     const handleTitleClick = (toolName === 'Edit' || toolName === 'Write' || toolName === 'ApplyPatch') && contentProps.filePath && onFileOpen
       ? () => onFileOpen(contentProps.filePath, {
           old_string: contentProps.oldContent,
@@ -288,9 +274,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         })
       : undefined;
 
-    const preview = mode === 'input'
-      ? generatePreview(parsedData)
-      : generateResultPreview(parsedData);
+    const badgeElement = toolStatus && toolStatus !== 'completed' ? <ToolStatusBadge status={toolStatus} /> : undefined;
 
     return (
       <CollapsibleDisplay
@@ -299,10 +283,10 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         title={title}
         defaultOpen={defaultOpen}
         onTitleClick={handleTitleClick}
+        badge={badgeElement}
         showRawParameters={mode === 'input' && showRawParameters}
         rawContent={rawToolInput}
         toolCategory={getToolCategory(toolName)}
-        preview={preview}
       >
         {contentComponent}
       </CollapsibleDisplay>

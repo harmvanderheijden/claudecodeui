@@ -59,16 +59,18 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     const abortController = new AbortController();
 
     const fetchProjectFiles = async () => {
-      const projectName = selectedProject?.name;
+      // File list is keyed by DB projectId now; the backend resolves it to
+      // the project's path before reading.
+      const projectId = selectedProject?.projectId;
       setFileList([]);
       setFilteredFiles([]);
-      if (!projectName) {
+      if (!projectId) {
         return;
       }
 
 
       try {
-        const response = await api.getFiles(projectName, { signal: abortController.signal });
+        const response = await api.getFiles(projectId, { signal: abortController.signal });
         if (!response.ok) {
           return;
         }
@@ -88,7 +90,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     return () => {
       abortController.abort();
     };
-  }, [selectedProject?.name]);
+  }, [selectedProject?.projectId]);
 
   useEffect(() => {
     const textBeforeCursor = input.slice(0, cursorPosition);
@@ -161,7 +163,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
         fileMentionSet.has(part) ? (
           <span
             key={`mention-${index}`}
-            className="bg-blue-200/70 -ml-0.5 dark:bg-blue-300/40 px-0.5 rounded-md box-decoration-clone text-transparent"
+            className="-ml-0.5 rounded-md bg-blue-200/70 box-decoration-clone px-0.5 text-transparent dark:bg-blue-300/40"
           >
             {part}
           </span>

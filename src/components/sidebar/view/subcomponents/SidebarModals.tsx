@@ -1,15 +1,16 @@
 import { useMemo } from 'react';
 import ReactDOM from 'react-dom';
-import { AlertTriangle, Trash2 } from 'lucide-react';
+import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
-import { Button } from '../../../ui/button';
-import ProjectCreationWizard from '../../../ProjectCreationWizard';
-import Settings from '../../../Settings';
-import VersionUpgradeModal from '../../../modals/VersionUpgradeModal';
+import { Button } from '../../../../shared/view/ui';
+import Settings from '../../../settings/view/Settings';
+import VersionUpgradeModal from '../../../version-upgrade/view';
 import type { Project } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
+import type { InstallMode } from '../../../../hooks/useVersionCheck';
 import { normalizeProjectForSettings } from '../../utils/utils';
 import type { DeleteProjectConfirmation, SessionDeleteConfirmation, SettingsProject } from '../../types/types';
+import ProjectCreationWizard from '../../../project-creation-wizard';
 
 type SidebarModalsProps = {
   projects: Project[];
@@ -21,15 +22,16 @@ type SidebarModalsProps = {
   onProjectCreated: () => void;
   deleteConfirmation: DeleteProjectConfirmation | null;
   onCancelDeleteProject: () => void;
-  onConfirmDeleteProject: () => void;
+  onConfirmDeleteProject: (deleteData?: boolean) => void;
   sessionDeleteConfirmation: SessionDeleteConfirmation | null;
   onCancelDeleteSession: () => void;
-  onConfirmDeleteSession: () => void;
+  onConfirmDeleteSession: (hardDelete?: boolean) => void;
   showVersionModal: boolean;
   onCloseVersionModal: () => void;
   releaseInfo: ReleaseInfo | null;
   currentVersion: string;
   latestVersion: string | null;
+  installMode: InstallMode;
   t: TFunction;
 };
 
@@ -65,6 +67,7 @@ export default function SidebarModals({
   releaseInfo,
   currentVersion,
   latestVersion,
+  installMode,
   t,
 }: SidebarModalsProps) {
   // Settings expects project identity/path fields to be present for dropdown labels and local-scope MCP config.
@@ -97,51 +100,51 @@ export default function SidebarModals({
 
       {deleteConfirmation &&
         ReactDOM.createPortal(
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-card border border-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
               <div className="p-6">
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
-                    <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-900/30">
+                    <AlertTriangle className="h-6 w-6 text-orange-600 dark:text-orange-400" />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-lg font-semibold text-foreground mb-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="mb-2 text-lg font-semibold text-foreground">
                       {t('deleteConfirmation.deleteProject')}
                     </h3>
-                    <p className="text-sm text-muted-foreground mb-1">
+                    <p className="mb-1 text-sm text-muted-foreground">
                       {t('deleteConfirmation.confirmDelete')}{' '}
                       <span className="font-medium text-foreground">
-                        {deleteConfirmation.project.displayName || deleteConfirmation.project.name}
+                        {deleteConfirmation.project.displayName || deleteConfirmation.project.projectId}
                       </span>
                       ?
                     </p>
                     {deleteConfirmation.sessionCount > 0 && (
-                      <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                        <p className="text-sm text-red-700 dark:text-red-300 font-medium">
-                          {t('deleteConfirmation.sessionCount', { count: deleteConfirmation.sessionCount })}
-                        </p>
-                        <p className="text-xs text-red-600 dark:text-red-400 mt-1">
-                          {t('deleteConfirmation.allConversationsDeleted')}
-                        </p>
-                      </div>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {t('deleteConfirmation.sessionCount', { count: deleteConfirmation.sessionCount })}
+                      </p>
                     )}
-                    <p className="text-xs text-muted-foreground mt-3">
-                      {t('deleteConfirmation.cannotUndo')}
-                    </p>
                   </div>
                 </div>
               </div>
-              <div className="flex gap-3 p-4 bg-muted/30 border-t border-border">
-                <Button variant="outline" className="flex-1" onClick={onCancelDeleteProject}>
-                  {t('actions.cancel')}
+              <div className="flex flex-col gap-2 border-t border-border bg-muted/30 p-4">
+                <Button
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => onConfirmDeleteProject(false)}
+                >
+                  <EyeOff className="mr-2 h-4 w-4" />
+                  {t('deleteConfirmation.archiveProject', 'Archive project')}
                 </Button>
                 <Button
                   variant="destructive"
-                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                  onClick={onConfirmDeleteProject}
+                  className="w-full justify-start bg-red-600 text-white hover:bg-red-700"
+                  onClick={() => onConfirmDeleteProject(true)}
                 >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  {t('actions.delete')}
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  {t('deleteConfirmation.deleteAllData')}
+                </Button>
+                <Button variant="ghost" className="w-full" onClick={onCancelDeleteProject}>
+                  {t('actions.cancel')}
                 </Button>
               </div>
             </div>
@@ -151,41 +154,53 @@ export default function SidebarModals({
 
       {sessionDeleteConfirmation &&
         ReactDOM.createPortal(
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-card border border-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
               <div className="p-6">
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
-                    <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                    <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-lg font-semibold text-foreground mb-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="mb-2 text-lg font-semibold text-foreground">
                       {t('deleteConfirmation.deleteSession')}
                     </h3>
-                    <p className="text-sm text-muted-foreground mb-1">
+                    <p className="mb-1 text-sm text-muted-foreground">
                       {t('deleteConfirmation.confirmDelete')}{' '}
                       <span className="font-medium text-foreground">
                         {sessionDeleteConfirmation.sessionTitle || t('sessions.unnamed')}
                       </span>
                       ?
                     </p>
-                    <p className="text-xs text-muted-foreground mt-3">
-                      {t('deleteConfirmation.cannotUndo')}
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {sessionDeleteConfirmation.isArchived
+                        ? t('deleteConfirmation.archivedSessionNotice', 'This session is already archived. You can keep it hidden or delete it permanently.')
+                        : t('deleteConfirmation.archiveSessionNotice', 'Archive keeps the session out of the active list while preserving its history.')}
                     </p>
                   </div>
                 </div>
               </div>
-              <div className="flex gap-3 p-4 bg-muted/30 border-t border-border">
-                <Button variant="outline" className="flex-1" onClick={onCancelDeleteSession}>
-                  {t('actions.cancel')}
-                </Button>
+              <div className="flex flex-col gap-2 border-t border-border bg-muted/30 p-4">
+                {!sessionDeleteConfirmation.isArchived && (
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => onConfirmDeleteSession(false)}
+                  >
+                    <EyeOff className="mr-2 h-4 w-4" />
+                    {t('deleteConfirmation.archiveSession', 'Archive session')}
+                  </Button>
+                )}
                 <Button
                   variant="destructive"
-                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                  onClick={onConfirmDeleteSession}
+                  className="w-full justify-start bg-red-600 text-white hover:bg-red-700"
+                  onClick={() => onConfirmDeleteSession(true)}
                 >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  {t('actions.delete')}
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  {t('deleteConfirmation.deleteSessionPermanently', 'Delete permanently')}
+                </Button>
+                <Button variant="ghost" className="w-full" onClick={onCancelDeleteSession}>
+                  {t('actions.cancel')}
                 </Button>
               </div>
             </div>
@@ -199,6 +214,7 @@ export default function SidebarModals({
         releaseInfo={releaseInfo}
         currentVersion={currentVersion}
         latestVersion={latestVersion}
+        installMode={installMode}
       />
     </>
   );

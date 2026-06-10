@@ -1,23 +1,11 @@
-import type { Dispatch, MouseEvent, RefObject, SetStateAction } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
+
 import type { AppTab, Project, ProjectSession } from '../../../types/app';
+import type { SessionNavigationOptions } from '../../chat/types/types';
 
 export type SessionLifecycleHandler = (sessionId?: string | null) => void;
 
-export interface DiffInfo {
-  old_string?: string;
-  new_string?: string;
-  [key: string]: unknown;
-}
-
-export interface EditingFile {
-  name: string;
-  path: string;
-  projectName?: string;
-  diffInfo?: DiffInfo | null;
-  [key: string]: unknown;
-}
-
-export interface TaskMasterTask {
+export type TaskMasterTask = {
   id: string | number;
   title?: string;
   description?: string;
@@ -29,24 +17,24 @@ export interface TaskMasterTask {
   dependencies?: Array<string | number>;
   subtasks?: TaskMasterTask[];
   [key: string]: unknown;
-}
+};
 
-export interface TaskReference {
+export type TaskReference = {
   id: string | number;
   title?: string;
   [key: string]: unknown;
-}
+};
 
 export type TaskSelection = TaskMasterTask | TaskReference;
 
-export interface PrdFile {
+export type PrdFile = {
   name: string;
   content?: string;
   isExisting?: boolean;
   [key: string]: unknown;
-}
+};
 
-export interface MainContentProps {
+export type MainContentProps = {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   activeTab: AppTab;
@@ -63,13 +51,13 @@ export interface MainContentProps {
   onSessionProcessing: SessionLifecycleHandler;
   onSessionNotProcessing: SessionLifecycleHandler;
   processingSessions: Set<string>;
-  onReplaceTemporarySession: SessionLifecycleHandler;
-  onNavigateToSession: (targetSessionId: string) => void;
+  onNavigateToSession: (targetSessionId: string, options?: SessionNavigationOptions) => void;
   onShowSettings: () => void;
   externalMessageUpdate: number;
-}
+  newSessionTrigger: number;
+};
 
-export interface MainContentHeaderProps {
+export type MainContentHeaderProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   selectedProject: Project;
@@ -77,32 +65,19 @@ export interface MainContentHeaderProps {
   shouldShowTasksTab: boolean;
   isMobile: boolean;
   onMenuClick: () => void;
-}
+};
 
-export interface MainContentStateViewProps {
+export type MainContentStateViewProps = {
   mode: 'loading' | 'empty';
   isMobile: boolean;
   onMenuClick: () => void;
-}
+};
 
-export interface MobileMenuButtonProps {
+export type MobileMenuButtonProps = {
   onMenuClick: () => void;
   compact?: boolean;
-}
+};
 
-export interface EditorSidebarProps {
-  editingFile: EditingFile | null;
-  isMobile: boolean;
-  editorExpanded: boolean;
-  editorWidth: number;
-  resizeHandleRef: RefObject<HTMLDivElement>;
-  onResizeStart: (event: MouseEvent<HTMLDivElement>) => void;
-  onCloseEditor: () => void;
-  onToggleEditorExpand: () => void;
-  projectPath?: string;
-  fillSpace?: boolean;
-}
-
-export interface TaskMasterPanelProps {
+export type TaskMasterPanelProps = {
   isVisible: boolean;
-}
+};

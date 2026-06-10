@@ -4,14 +4,16 @@ import path from 'path';
 import os from 'os';
 import { promises as fs } from 'fs';
 import crypto from 'crypto';
-import { userDb, apiKeysDb, githubTokensDb } from '../database/db.js';
-import { addProjectManually } from '../projects.js';
+import { userDb, apiKeysDb, githubTokensDb, projectsDb } from '../modules/database/index.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
 import { queryCodex } from '../openai-codex.js';
+import { spawnGemini } from '../gemini-cli.js';
+import { spawnOpenCode } from '../opencode-cli.js';
 import { Octokit } from '@octokit/rest';
-import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS } from '../../shared/modelConstants.js';
+import { providerModelsService } from '../modules/providers/services/provider-models.service.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { normalizeProjectPath } from '../shared/utils.js';
 
 const router = express.Router();
 
@@ -449,9 +451,10 @@ async function cleanupProject(projectPath, sessionId = null) {
  * SSE Stream Writer - Adapts SDK/CLI output to Server-Sent Events
  */
 class SSEStreamWriter {
-  constructor(res) {
+  constructor(res, userId = null) {
     this.res = res;
     this.sessionId = null;
+    this.userId = userId;
     this.isSSEStreamWriter = true;  // Marker for transport detection
   }
 
@@ -473,6 +476,7 @@ class SSEStreamWriter {
 
   setSessionId(sessionId) {
     this.sessionId = sessionId;
+    this.send({ type: 'session-id', sessionId });
   }
 
   getSessionId() {
@@ -484,9 +488,10 @@ class SSEStreamWriter {
  * Non-streaming response collector
  */
 class ResponseCollector {
-  constructor() {
+  constructor(userId = null) {
     this.messages = [];
     this.sessionId = null;
+    this.userId = userId;
   }
 
   send(data) {
@@ -587,12 +592,14 @@ class ResponseCollector {
       }
     }
 
+    const inputTokens = totalInput + totalCacheRead + totalCacheCreation;
+
     return {
-      inputTokens: totalInput,
+      inputTokens,
       outputTokens: totalOutput,
       cacheReadTokens: totalCacheRead,
       cacheCreationTokens: totalCacheCreation,
-      totalTokens: totalInput + totalOutput + totalCacheRead + totalCacheCreation
+      totalTokens: inputTokens + totalOutput
     };
   }
 }
@@ -604,7 +611,7 @@ class ResponseCollector {
 /**
  * POST /api/agent
  *
- * Trigger an AI agent (Claude or Cursor) to work on a project.
+ * Trigger an AI agent to work on a project.
  * Supports automatic GitHub branch and pull request creation after successful completion.
  *
  * ================================================================================================
@@ -629,7 +636,7 @@ class ResponseCollector {
  *                          - Source for auto-generated branch names (if createBranch=true and no branchName)
  *                          - Fallback for PR title if no commits are made
  *
- * @param {string} provider - (Optional) AI provider to use. Options: 'claude' | 'cursor'
+ * @param {string} provider - (Optional) AI provider to use. Options: 'claude' | 'cursor' | 'codex' | 'gemini' | 'opencode'
  *                           Default: 'claude'
  *
  * @param {boolean} stream - (Optional) Enable Server-Sent Events (SSE) streaming for real-time updates.
@@ -639,7 +646,7 @@ class ResponseCollector {
  *
  * @param {string} model - (Optional) Model identifier for providers.
  *
- *                        Claude models: 'sonnet' (default), 'opus', 'haiku', 'opusplan', 'sonnet[1m]'
+ *                        Claude models: 'sonnet' (default), 'opus', 'haiku', 'opusplan', 'sonnet[1m]', 'fable'
  *                        Cursor models: 'gpt-5' (default), 'gpt-5.2', 'gpt-5.2-high', 'sonnet-4.5', 'opus-4.5',
  *                                       'gemini-3-pro', 'composer-1', 'auto', 'gpt-5.1', 'gpt-5.1-high',
  *                                       'gpt-5.1-codex', 'gpt-5.1-codex-high', 'gpt-5.1-codex-max',
@@ -747,7 +754,7 @@ class ResponseCollector {
  * Input Validations (400 Bad Request):
  *   - Either githubUrl OR projectPath must be provided (not neither)
  *   - message must be non-empty string
- *   - provider must be 'claude' or 'cursor'
+ *   - provider must be 'claude', 'cursor', 'codex', 'gemini', or 'opencode'
  *   - createBranch/createPR requires githubUrl OR projectPath (not neither)
  *   - branchName must pass Git naming rules (if provided)
  *
@@ -836,7 +843,7 @@ class ResponseCollector {
  *   }
  */
 router.post('/', validateExternalApiKey, async (req, res) => {
-  const { githubUrl, projectPath, message, provider = 'claude', model, githubToken, branchName } = req.body;
+  const { githubUrl, projectPath, message, provider = 'claude', model, githubToken, branchName, sessionId } = req.body;
 
   // Parse stream and cleanup as booleans (handle string "true"/"false" from curl)
   const stream = req.body.stream === undefined ? true : (req.body.stream === true || req.body.stream === 'true');
@@ -855,8 +862,8 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     return res.status(400).json({ error: 'message is required' });
   }
 
-  if (!['claude', 'cursor', 'codex'].includes(provider)) {
-    return res.status(400).json({ error: 'provider must be "claude", "cursor", or "codex"' });
+  if (!['claude', 'cursor', 'codex', 'gemini', 'opencode'].includes(provider)) {
+    return res.status(400).json({ error: 'provider must be "claude", "cursor", "codex", "gemini", or "opencode"' });
   }
 
   // Validate GitHub branch/PR creation requirements
@@ -886,7 +893,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       finalProjectPath = await cloneGitHubRepo(githubUrl.trim(), tokenToUse, targetPath);
     } else {
       // Use existing project path
-      finalProjectPath = path.resolve(projectPath);
+      finalProjectPath = normalizeProjectPath(path.resolve(projectPath));
 
       // Verify the path exists
       try {
@@ -896,19 +903,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       }
     }
 
-    // Register the project (or use existing registration)
-    let project;
-    try {
-      project = await addProjectManually(finalProjectPath);
-      console.log('📦 Project registered:', project);
-    } catch (error) {
-      // If project already exists, that's fine - continue with the existing registration
-      if (error.message && error.message.includes('Project already configured')) {
-        console.log('📦 Using existing project registration for:', finalProjectPath);
-        project = { path: finalProjectPath };
-      } else {
-        throw error;
-      }
+    finalProjectPath = normalizeProjectPath(finalProjectPath);
+
+    // Register project path in DB (or reuse existing active registration)
+    const registrationResult = projectsDb.createProjectPath(finalProjectPath, null);
+    if (registrationResult.outcome === 'active_conflict') {
+      console.log('Project registration already exists for:', finalProjectPath);
+    } else {
+      console.log('Project registered:', registrationResult.project);
     }
 
     // Set up writer based on streaming mode
@@ -919,7 +921,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
 
-      writer = new SSEStreamWriter(res);
+      writer = new SSEStreamWriter(res, req.user.id);
 
       // Send initial status
       writer.send({
@@ -929,7 +931,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       });
     } else {
       // Non-streaming mode: collect messages
-      writer = new ResponseCollector();
+      writer = new ResponseCollector(req.user.id);
 
       // Collect initial status message
       writer.send({
@@ -939,6 +941,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       });
     }
 
+    const codexModels = (await providerModelsService.getProviderModels('codex')).models;
+    const geminiModels = (await providerModelsService.getProviderModels('gemini')).models;
+    const opencodeModels = (await providerModelsService.getProviderModels('opencode')).models;
+
     // Start the appropriate session
     if (provider === 'claude') {
       console.log('🤖 Starting Claude SDK session');
@@ -946,7 +952,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       await queryClaudeSDK(message.trim(), {
         projectPath: finalProjectPath,
         cwd: finalProjectPath,
-        sessionId: null, // New session
+        sessionId: sessionId || null,
         model: model,
         permissionMode: 'bypassPermissions' // Bypass all permissions for API calls
       }, writer);
@@ -957,7 +963,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       await spawnCursor(message.trim(), {
         projectPath: finalProjectPath,
         cwd: finalProjectPath,
-        sessionId: null, // New session
+        sessionId: sessionId || null,
         model: model || undefined,
         skipPermissions: true // Bypass permissions for Cursor
       }, writer);
@@ -967,9 +973,28 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       await queryCodex(message.trim(), {
         projectPath: finalProjectPath,
         cwd: finalProjectPath,
-        sessionId: null,
-        model: model || CODEX_MODELS.DEFAULT,
+        sessionId: sessionId || null,
+        model: model || codexModels.DEFAULT,
         permissionMode: 'bypassPermissions'
+      }, writer);
+    } else if (provider === 'gemini') {
+      console.log('✨ Starting Gemini CLI session');
+
+      await spawnGemini(message.trim(), {
+        projectPath: finalProjectPath,
+        cwd: finalProjectPath,
+        sessionId: sessionId || null,
+        model: model || geminiModels.DEFAULT,
+        skipPermissions: true // CLI mode bypasses permissions
+      }, writer);
+    } else if (provider === 'opencode') {
+      console.log('Starting OpenCode CLI session');
+
+      await spawnOpenCode(message.trim(), {
+        projectPath: finalProjectPath,
+        cwd: finalProjectPath,
+        sessionId: sessionId || null,
+        model: model || opencodeModels.DEFAULT
       }, writer);
     }
 
@@ -1111,7 +1136,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           } else {
             prBody += `Agent task: ${message}`;
           }
-          prBody += '\n\n---\n*This pull request was automatically created by Claude Code UI Agent.*';
+          prBody += '\n\n---\n*This pull request was automatically created by CloudCLI.ai Agent.*';
 
           console.log(`📝 PR Title: ${prTitle}`);
 
@@ -1208,7 +1233,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('X-Accel-Buffering', 'no');
-        writer = new SSEStreamWriter(res);
+        writer = new SSEStreamWriter(res, req.user.id);
       }
 
       if (!res.writableEnded) {

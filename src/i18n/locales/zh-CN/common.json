@@ -84,7 +84,7 @@
     "openInEditor": "在编辑器中打开"
   },
   "mainContent": {
-    "loading": "正在加载 Claude Code UI",
+    "loading": "正在加载 CloudCLI",
     "settingUpWorkspace": "正在设置您的工作空间...",
     "chooseProject": "选择您的项目",
     "selectProjectDescription": "从侧边栏选择一个项目以开始使用 Claude 进行编程。每个项目包含您的聊天会话和文件历史。",
@@ -114,7 +114,22 @@
     "justNow": "刚刚",
     "minAgo": "{{count}} 分钟前",
     "hoursAgo": "{{count}} 小时前",
-    "daysAgo": "{{count}} 天前"
+    "daysAgo": "{{count}} 天前",
+    "newFile": "新建文件 (Cmd+N)",
+    "newFolder": "新建文件夹 (Cmd+Shift+N)",
+    "refresh": "刷新",
+    "collapseAll": "全部折叠",
+    "context": {
+      "rename": "重命名",
+      "delete": "删除",
+      "copyPath": "复制路径",
+      "download": "下载",
+      "newFile": "新建文件",
+      "newFolder": "新建文件夹",
+      "refresh": "刷新",
+      "menuLabel": "文件上下文菜单",
+      "loading": "加载中..."
+    }
   },
   "projectWizard": {
     "title": "创建新项目",
@@ -161,7 +176,6 @@
     },
     "step3": {
       "reviewConfig": "查看您的配置",
-      "workspaceType": "工作区类型：",
       "existingWorkspace": "现有工作区",
       "newWorkspace": "新建工作区",
       "path": "路径：",
@@ -191,6 +205,36 @@
       "failedToCreateFolder": "创建文件夹失败"
     }
   },
+  "notifications": {
+    "genericTool": "工具",
+    "codes": {
+      "generic": {
+        "info": {
+          "title": "通知"
+        }
+      },
+      "permission": {
+        "required": {
+          "title": "需要处理",
+          "body": "{{toolName}} 正在等待你的决策。"
+        }
+      },
+      "run": {
+        "stopped": {
+          "title": "运行已停止",
+          "body": "原因：{{reason}}"
+        },
+        "failed": {
+          "title": "运行失败"
+        }
+      },
+      "agent": {
+        "notification": {
+          "title": "Agent 通知"
+        }
+      }
+    }
+  },
   "versionUpdate": {
     "title": "有可用更新",
     "newVersionReady": "新版本已准备就绪",
@@ -200,6 +244,7 @@
     "viewFullRelease": "查看完整发布",
     "updateProgress": "更新进度：",
     "manualUpgrade": "手动升级：",
+    "npmUpgradeCommand": "npm install -g @cloudcli-ai/cloudcli@latest",
     "manualUpgradeHint": "或点击'立即更新'以自动运行更新。",
     "updateCompleted": "更新成功完成！",
     "restartServer": "请重启服务器以应用更改。",

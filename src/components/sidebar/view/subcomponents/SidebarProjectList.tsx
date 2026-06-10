@@ -1,11 +1,9 @@
+import { useEffect } from 'react';
 import type { TFunction } from 'i18next';
-import type { LoadingProgress, Project, ProjectSession, SessionProvider } from '../../../../types/app';
-import type {
-  LoadingSessionsByProject,
-  MCPServerStatus,
-  SessionWithProvider,
-  TouchHandlerFactory,
-} from '../../types/types';
+
+import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../../types/app';
+import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
+
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
 
@@ -19,7 +17,6 @@ export type SidebarProjectListProps = {
   expandedProjects: Set<string>;
   editingProject: string | null;
   editingName: string;
-  loadingSessions: LoadingSessionsByProject;
   initialSessionsLoaded: Set<string>;
   currentTime: Date;
   editingSession: string | null;
@@ -28,6 +25,8 @@ export type SidebarProjectListProps = {
   tasksEnabled: boolean;
   mcpServerStatus: MCPServerStatus;
   getProjectSessions: (project: Project) => SessionWithProvider[];
+  onLoadMoreSessions: (projectId: string) => void;
+  loadingMoreProjects: Set<string>;
   isProjectStarred: (projectName: string) => boolean;
   onEditingNameChange: (value: string) => void;
   onToggleProject: (projectName: string) => void;
@@ -42,15 +41,13 @@ export type SidebarProjectListProps = {
     projectName: string,
     sessionId: string,
     sessionTitle: string,
-    provider: SessionProvider,
+    provider: LLMProvider,
   ) => void;
-  onLoadMoreSessions: (project: Project) => void;
   onNewSession: (project: Project) => void;
   onEditingSessionNameChange: (value: string) => void;
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
-  onSaveEditingSession: (projectName: string, sessionId: string, summary: string) => void;
-  touchHandlerFactory: TouchHandlerFactory;
+  onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   t: TFunction;
 };
 
@@ -64,7 +61,6 @@ export default function SidebarProjectList({
   expandedProjects,
   editingProject,
   editingName,
-  loadingSessions,
   initialSessionsLoaded,
   currentTime,
   editingSession,
@@ -73,6 +69,8 @@ export default function SidebarProjectList({
   tasksEnabled,
   mcpServerStatus,
   getProjectSessions,
+  onLoadMoreSessions,
+  loadingMoreProjects,
   isProjectStarred,
   onEditingNameChange,
   onToggleProject,
@@ -84,13 +82,11 @@ export default function SidebarProjectList({
   onDeleteProject,
   onSessionSelect,
   onDeleteSession,
-  onLoadMoreSessions,
   onNewSession,
   onEditingSessionNameChange,
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
-  touchHandlerFactory,
   t,
 }: SidebarProjectListProps) {
   const state = (
@@ -103,26 +99,37 @@ export default function SidebarProjectList({
     />
   );
 
+  useEffect(() => {
+    let baseTitle = 'CloudCLI UI';
+    const displayName = selectedProject?.displayName?.trim();
+    if (displayName) {
+      baseTitle = `${displayName} - ${baseTitle}`;
+    }
+    document.title = baseTitle;
+  }, [selectedProject]);
+
   const showProjects = !isLoading && projects.length > 0 && filteredProjects.length > 0;
 
   return (
-    <div className="md:space-y-1 pb-safe-area-inset-bottom">
+    <div className="pb-safe-area-inset-bottom md:space-y-1">
       {!showProjects
         ? state
         : filteredProjects.map((project) => (
+            // React key + per-project state lookups all use the DB `projectId`
+            // so they remain stable across renames and session changes.
             <SidebarProjectItem
-              key={project.name}
+              key={project.projectId}
               project={project}
               selectedProject={selectedProject}
               selectedSession={selectedSession}
-              isExpanded={expandedProjects.has(project.name)}
-              isDeleting={deletingProjects.has(project.name)}
-              isStarred={isProjectStarred(project.name)}
+              isExpanded={expandedProjects.has(project.projectId)}
+              isDeleting={deletingProjects.has(project.projectId)}
+              isStarred={isProjectStarred(project.projectId)}
               editingProject={editingProject}
               editingName={editingName}
               sessions={getProjectSessions(project)}
-              initialSessionsLoaded={initialSessionsLoaded.has(project.name)}
-              isLoadingSessions={Boolean(loadingSessions[project.name])}
+              initialSessionsLoaded={initialSessionsLoaded.has(project.projectId)}
+              isLoadingMoreSessions={loadingMoreProjects.has(project.projectId)}
               currentTime={currentTime}
               editingSession={editingSession}
               editingSessionName={editingSessionName}
@@ -144,7 +151,6 @@ export default function SidebarProjectList({
               onStartEditingSession={onStartEditingSession}
               onCancelEditingSession={onCancelEditingSession}
               onSaveEditingSession={onSaveEditingSession}
-              touchHandlerFactory={touchHandlerFactory}
               t={t}
             />
           ))}

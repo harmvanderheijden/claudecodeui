@@ -10,10 +10,8 @@ import type {
   TouchEvent,
 } from 'react';
 import { useDropzone } from 'react-dropzone';
+
 import { authenticatedFetch } from '../../../utils/api';
-
-import { thinkingModes } from '../constants/thinkingModes';
-
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type {
@@ -21,13 +19,13 @@ import type {
   PendingPermissionRequest,
   PermissionMode,
 } from '../types/types';
-import { useFileMentions } from './useFileMentions';
-import { type SlashCommand, useSlashCommands } from './useSlashCommands';
-import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
+import type { Project, ProjectSession, LLMProvider, ProviderModelsCacheInfo } from '../../../types/app';
 import { escapeRegExp } from '../utils/chatFormatting';
 
+import { useFileMentions } from './useFileMentions';
+import { type SlashCommand, useSlashCommands } from './useSlashCommands';
+
 type PendingViewSession = {
-  sessionId: string | null;
   startedAt: number;
 };
 
@@ -35,25 +33,27 @@ interface UseChatComposerStateArgs {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
-  provider: SessionProvider;
+  provider: LLMProvider;
   permissionMode: PermissionMode | string;
   cyclePermissionMode: () => void;
   cursorModel: string;
   claudeModel: string;
   codexModel: string;
+  geminiModel: string;
+  opencodeModel: string;
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
   sendMessage: (message: unknown) => void;
   sendByCtrlEnter?: boolean;
   onSessionActive?: (sessionId?: string | null) => void;
+  onSessionProcessing?: (sessionId?: string | null) => void;
   onInputFocusChange?: (focused: boolean) => void;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
   pendingViewSessionRef: { current: PendingViewSession | null };
   scrollToBottom: () => void;
-  setChatMessages: Dispatch<SetStateAction<ChatMessage[]>>;
-  setSessionMessages?: Dispatch<SetStateAction<any[]>>;
+  addMessage: (msg: ChatMessage) => void;
   setIsLoading: (loading: boolean) => void;
   setCanAbortSession: (canAbort: boolean) => void;
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
@@ -75,12 +75,90 @@ interface CommandExecutionResult {
   hasFileIncludes?: boolean;
 }
 
+export type ModelCommandData = {
+  current?: {
+    provider?: string;
+    providerLabel?: string;
+    model?: string;
+  };
+  available?: Partial<Record<LLMProvider, string[]>>;
+  availableModels?: string[];
+  availableOptions?: Array<{
+    value: string;
+    label?: string;
+    description?: string;
+  }>;
+  defaultModel?: string;
+  cache?: ProviderModelsCacheInfo;
+};
+
+export type CostCommandData = {
+  tokenUsage?: {
+    used?: number;
+    total?: number;
+  };
+  tokenBreakdown?: {
+    input?: number;
+    output?: number;
+  };
+  provider?: string;
+  model?: string;
+};
+
+export type StatusCommandData = {
+  version?: string;
+  packageName?: string;
+  uptime?: string;
+  model?: string;
+  provider?: string;
+  nodeVersion?: string;
+  platform?: string;
+  pid?: number;
+  memoryUsage?: {
+    rssMb?: number;
+    heapUsedMb?: number;
+    heapTotalMb?: number;
+  };
+};
+
+export type HelpCommandData = {
+  content?: string;
+  format?: string;
+  commands?: Array<{
+    name: string;
+    description?: string;
+    namespace?: string;
+  }>;
+};
+
+export type CommandModalKind = 'help' | 'models' | 'cost' | 'status';
+
+export type CommandModalPayload = {
+  kind: CommandModalKind;
+  data: HelpCommandData | ModelCommandData | CostCommandData | StatusCommandData;
+};
+
 const createFakeSubmitEvent = () => {
   return { preventDefault: () => undefined } as unknown as FormEvent<HTMLFormElement>;
 };
 
-const isTemporarySessionId = (sessionId: string | null | undefined) =>
-  Boolean(sessionId && sessionId.startsWith('new-session-'));
+const getNotificationSessionSummary = (
+  selectedSession: ProjectSession | null,
+  fallbackInput: string,
+): string | null => {
+  const sessionSummary = selectedSession?.summary || selectedSession?.name || selectedSession?.title;
+  if (typeof sessionSummary === 'string' && sessionSummary.trim()) {
+    const normalized = sessionSummary.replace(/\s+/g, ' ').trim();
+    return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
+  }
+
+  const normalizedFallback = fallbackInput.replace(/\s+/g, ' ').trim();
+  if (!normalizedFallback) {
+    return null;
+  }
+
+  return normalizedFallback.length > 80 ? `${normalizedFallback.slice(0, 77)}...` : normalizedFallback;
+};
 
 export function useChatComposerState({
   selectedProject,
@@ -92,19 +170,21 @@ export function useChatComposerState({
   cursorModel,
   claudeModel,
   codexModel,
+  geminiModel,
+  opencodeModel,
   isLoading,
   canAbortSession,
   tokenBudget,
   sendMessage,
   sendByCtrlEnter,
   onSessionActive,
+  onSessionProcessing,
   onInputFocusChange,
   onFileOpen,
   onShowSettings,
   pendingViewSessionRef,
   scrollToBottom,
-  setChatMessages,
-  setSessionMessages,
+  addMessage,
   setIsLoading,
   setCanAbortSession,
   setClaudeStatus,
@@ -113,7 +193,9 @@ export function useChatComposerState({
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
-      return safeLocalStorage.getItem(`draft_input_${selectedProject.name}`) || '';
+      // Draft inputs are keyed by the DB projectId so per-project drafts
+      // survive display-name changes.
+      return safeLocalStorage.getItem(`draft_input_${selectedProject.projectId}`) || '';
     }
     return '';
   });
@@ -121,7 +203,7 @@ export function useChatComposerState({
   const [uploadingImages, setUploadingImages] = useState<Map<string, number>>(new Map());
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
-  const [thinkingMode, setThinkingMode] = useState('none');
+  const [commandModalPayload, setCommandModalPayload] = useState<CommandModalPayload | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
@@ -129,75 +211,55 @@ export function useChatComposerState({
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
   const inputValueRef = useRef(input);
+  const selectedProjectId = selectedProject?.projectId;
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
       const { action, data } = result;
       switch (action) {
-        case 'clear':
-          setChatMessages([]);
-          setSessionMessages?.([]);
-          break;
-
         case 'help':
-          setChatMessages((previous) => [
-            ...previous,
-            {
-              type: 'assistant',
-              content: data.content,
-              timestamp: Date.now(),
-            },
-          ]);
+          setCommandModalPayload({
+            kind: 'help',
+            data: (data || {}) as HelpCommandData,
+          });
           break;
 
-        case 'model':
-          setChatMessages((previous) => [
-            ...previous,
-            {
-              type: 'assistant',
-              content: `**Current Model**: ${data.current.model}\n\n**Available Models**:\n\nClaude: ${data.available.claude.join(', ')}\n\nCursor: ${data.available.cursor.join(', ')}`,
-              timestamp: Date.now(),
-            },
-          ]);
+        case 'models':
+          setCommandModalPayload({
+            kind: 'models',
+            data: (data || {}) as ModelCommandData,
+          });
           break;
 
         case 'cost': {
-          const costMessage = `**Token Usage**: ${data.tokenUsage.used.toLocaleString()} / ${data.tokenUsage.total.toLocaleString()} (${data.tokenUsage.percentage}%)\n\n**Estimated Cost**:\n- Input: $${data.cost.input}\n- Output: $${data.cost.output}\n- **Total**: $${data.cost.total}\n\n**Model**: ${data.model}`;
-          setChatMessages((previous) => [
-            ...previous,
-            { type: 'assistant', content: costMessage, timestamp: Date.now() },
-          ]);
+          setCommandModalPayload({
+            kind: 'cost',
+            data: (data || {}) as CostCommandData,
+          });
           break;
         }
 
         case 'status': {
-          const statusMessage = `**System Status**\n\n- Version: ${data.version}\n- Uptime: ${data.uptime}\n- Model: ${data.model}\n- Provider: ${data.provider}\n- Node.js: ${data.nodeVersion}\n- Platform: ${data.platform}`;
-          setChatMessages((previous) => [
-            ...previous,
-            { type: 'assistant', content: statusMessage, timestamp: Date.now() },
-          ]);
+          setCommandModalPayload({
+            kind: 'status',
+            data: (data || {}) as StatusCommandData,
+          });
           break;
         }
 
         case 'memory':
           if (data.error) {
-            setChatMessages((previous) => [
-              ...previous,
-              {
-                type: 'assistant',
-                content: `⚠️ ${data.message}`,
-                timestamp: Date.now(),
-              },
-            ]);
+            addMessage({
+              type: 'assistant',
+              content: `Warning: ${data.message}`,
+              timestamp: Date.now(),
+            });
           } else {
-            setChatMessages((previous) => [
-              ...previous,
-              {
-                type: 'assistant',
-                content: `📝 ${data.message}\n\nPath: \`${data.path}\``,
-                timestamp: Date.now(),
-              },
-            ]);
+            addMessage({
+              type: 'assistant',
+              content: `${data.message}\n\nPath: \`${data.path}\``,
+              timestamp: Date.now(),
+            });
             if (data.exists && onFileOpen) {
               onFileOpen(data.path);
             }
@@ -208,35 +270,16 @@ export function useChatComposerState({
           onShowSettings?.();
           break;
 
-        case 'rewind':
-          if (data.error) {
-            setChatMessages((previous) => [
-              ...previous,
-              {
-                type: 'assistant',
-                content: `⚠️ ${data.message}`,
-                timestamp: Date.now(),
-              },
-            ]);
-          } else {
-            setChatMessages((previous) => previous.slice(0, -data.steps * 2));
-            setChatMessages((previous) => [
-              ...previous,
-              {
-                type: 'assistant',
-                content: `⏪ ${data.message}`,
-                timestamp: Date.now(),
-              },
-            ]);
-          }
-          break;
-
         default:
           console.warn('Unknown built-in command action:', action);
       }
     },
-    [onFileOpen, onShowSettings, setChatMessages, setSessionMessages],
+    [onFileOpen, onShowSettings, addMessage],
   );
+
+  const closeCommandModal = useCallback(() => {
+    setCommandModalPayload(null);
+  }, []);
 
   const handleCustomCommand = useCallback(async (result: CommandExecutionResult) => {
     const { content, hasBashCommands } = result;
@@ -246,14 +289,11 @@ export function useChatComposerState({
         'This command contains bash commands that will be executed. Do you want to proceed?',
       );
       if (!confirmed) {
-        setChatMessages((previous) => [
-          ...previous,
-          {
-            type: 'assistant',
-            content: '❌ Command execution cancelled',
-            timestamp: Date.now(),
-          },
-        ]);
+        addMessage({
+          type: 'assistant',
+          content: 'Command execution cancelled',
+          timestamp: Date.now(),
+        });
         return;
       }
     }
@@ -268,25 +308,36 @@ export function useChatComposerState({
         handleSubmitRef.current(createFakeSubmitEvent());
       }
     }, 0);
-  }, [setChatMessages]);
+  }, [addMessage]);
 
   const executeCommand = useCallback(
-    async (command: SlashCommand) => {
+    async (command: SlashCommand, rawInput?: string, options?: { preserveInput?: boolean }) => {
       if (!command || !selectedProject) {
         return;
       }
 
       try {
-        const commandMatch = input.match(new RegExp(`${escapeRegExp(command.name)}\\s*(.*)`));
+        const effectiveInput = rawInput ?? input;
+        const commandMatch = effectiveInput.match(new RegExp(`${escapeRegExp(command.name)}\\s*(.*)`));
         const args =
           commandMatch && commandMatch[1] ? commandMatch[1].trim().split(/\s+/) : [];
 
+        // The `/api/commands/execute` context sends `projectId` now instead of
+        // a folder-derived project name; the path is still included verbatim.
         const context = {
           projectPath: selectedProject.fullPath || selectedProject.path,
-          projectName: selectedProject.name,
+          projectId: selectedProject.projectId,
           sessionId: currentSessionId,
           provider,
-          model: provider === 'cursor' ? cursorModel : provider === 'codex' ? codexModel : claudeModel,
+          model: provider === 'cursor'
+            ? cursorModel
+            : provider === 'codex'
+              ? codexModel
+              : provider === 'gemini'
+                ? geminiModel
+                : provider === 'opencode'
+                  ? opencodeModel
+                  : claudeModel,
           tokenUsage: tokenBudget,
         };
 
@@ -317,22 +368,21 @@ export function useChatComposerState({
         const result = (await response.json()) as CommandExecutionResult;
         if (result.type === 'builtin') {
           handleBuiltInCommand(result);
-          setInput('');
-          inputValueRef.current = '';
+          if (!options?.preserveInput) {
+            setInput('');
+            inputValueRef.current = '';
+          }
         } else if (result.type === 'custom') {
           await handleCustomCommand(result);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error('Error executing command:', error);
-        setChatMessages((previous) => [
-          ...previous,
-          {
-            type: 'assistant',
-            content: `Error executing command: ${message}`,
-            timestamp: Date.now(),
-          },
-        ]);
+        addMessage({
+          type: 'assistant',
+          content: `Error executing command: ${message}`,
+          timestamp: Date.now(),
+        });
       }
     },
     [
@@ -340,17 +390,33 @@ export function useChatComposerState({
       codexModel,
       currentSessionId,
       cursorModel,
+      geminiModel,
+      opencodeModel,
       handleBuiltInCommand,
       handleCustomCommand,
       input,
       provider,
       selectedProject,
-      setChatMessages,
+      addMessage,
       tokenBudget,
     ],
   );
 
+  const showCostModal = useCallback(() => {
+    executeCommand(
+      {
+        name: '/cost',
+        description: 'Display token usage information',
+        namespace: 'builtin',
+        metadata: { type: 'builtin' },
+      } as SlashCommand,
+      '/cost',
+      { preserveInput: true },
+    );
+  }, [executeCommand]);
+
   const {
+    slashCommands,
     slashCommandsCount,
     filteredCommands,
     frequentCommands,
@@ -364,6 +430,7 @@ export function useChatComposerState({
     handleCommandMenuKeyDown,
   } = useSlashCommands({
     selectedProject,
+    provider,
     input,
     setInput,
     textareaRef,
@@ -473,11 +540,42 @@ export function useChatComposerState({
         return;
       }
 
-      let messageContent = currentInput;
-      const selectedThinkingMode = thinkingModes.find((mode: { id: string; prefix?: string }) => mode.id === thinkingMode);
-      if (selectedThinkingMode && selectedThinkingMode.prefix) {
-        messageContent = `${selectedThinkingMode.prefix}: ${currentInput}`;
+      // Intercept slash commands only when "/" is the first input character.
+      // Also accept exact "help" as a convenience alias for users who expect CLI-style help.
+      const commandInput = currentInput.trimEnd();
+      const isHelpAlias = commandInput.trim().toLowerCase() === 'help';
+      if (commandInput.startsWith('/') || isHelpAlias) {
+        const firstSpace = commandInput.indexOf(' ');
+        const commandName = isHelpAlias
+          ? '/help'
+          : firstSpace > 0 ? commandInput.slice(0, firstSpace) : commandInput;
+        const matchedCommand =
+          slashCommands.find((cmd: SlashCommand) => cmd.name === commandName) ||
+          (commandName === '/help'
+            ? ({
+                name: '/help',
+                description: 'Show help documentation for Claude Code',
+                namespace: 'builtin',
+                metadata: { type: 'builtin' },
+              } as SlashCommand)
+            : undefined);
+        if (matchedCommand && matchedCommand.type !== 'skill') {
+          executeCommand(matchedCommand, isHelpAlias ? '/help' : commandInput);
+          setInput('');
+          inputValueRef.current = '';
+          setAttachedImages([]);
+          setUploadingImages(new Map());
+          setImageErrors(new Map());
+          resetCommandMenuState();
+          setIsTextareaExpanded(false);
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto';
+          }
+          return;
+        }
       }
+
+      const messageContent = currentInput;
 
       let uploadedImages: unknown[] = [];
       if (attachedImages.length > 0) {
@@ -487,7 +585,7 @@ export function useChatComposerState({
         });
 
         try {
-          const response = await authenticatedFetch(`/api/projects/${selectedProject.name}/upload-images`, {
+          const response = await authenticatedFetch(`/api/projects/${selectedProject.projectId}/upload-images`, {
             method: 'POST',
             headers: {},
             body: formData,
@@ -502,17 +600,17 @@ export function useChatComposerState({
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           console.error('Image upload failed:', error);
-          setChatMessages((previous) => [
-            ...previous,
-            {
-              type: 'error',
-              content: `Failed to upload images: ${message}`,
-              timestamp: new Date(),
-            },
-          ]);
+          addMessage({
+            type: 'error',
+            content: `Failed to upload images: ${message}`,
+            timestamp: new Date(),
+          });
           return;
         }
       }
+
+      const effectiveSessionId =
+        currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
 
       const userMessage: ChatMessage = {
         type: 'user',
@@ -521,8 +619,8 @@ export function useChatComposerState({
         timestamp: new Date(),
       };
 
-      setChatMessages((previous) => [...previous, userMessage]);
-      setIsLoading(true);
+      addMessage(userMessage);
+      setIsLoading(true); // Processing banner starts
       setCanAbortSession(true);
       setClaudeStatus({
         text: 'Processing',
@@ -533,18 +631,15 @@ export function useChatComposerState({
       setIsUserScrolledUp(false);
       setTimeout(() => scrollToBottom(), 100);
 
-      const effectiveSessionId =
-        currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
-      const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
-
       if (!effectiveSessionId && !selectedSession?.id) {
-        if (typeof window !== 'undefined') {
-          // Reset stale pending IDs from previous interrupted runs before creating a new one.
-          sessionStorage.removeItem('pendingSessionId');
-        }
-        pendingViewSessionRef.current = { sessionId: null, startedAt: Date.now() };
+        // This tracks only that a request is in flight before the provider has
+        // emitted its real session id; routing still waits for session_created.
+        pendingViewSessionRef.current = { startedAt: Date.now() };
       }
-      onSessionActive?.(sessionToActivate);
+      if (effectiveSessionId) {
+        onSessionActive?.(effectiveSessionId);
+        onSessionProcessing?.(effectiveSessionId);
+      }
 
       const getToolsSettings = () => {
         try {
@@ -552,8 +647,12 @@ export function useChatComposerState({
             provider === 'cursor'
               ? 'cursor-tools-settings'
               : provider === 'codex'
-              ? 'codex-settings'
-              : 'claude-settings';
+                ? 'codex-settings'
+                : provider === 'gemini'
+                  ? 'gemini-settings'
+                  : provider === 'opencode'
+                    ? 'opencode-settings'
+                  : 'claude-settings';
           const savedSettings = safeLocalStorage.getItem(settingsKey);
           if (savedSettings) {
             return JSON.parse(savedSettings);
@@ -571,6 +670,7 @@ export function useChatComposerState({
 
       const toolsSettings = getToolsSettings();
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
+      const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
 
       if (provider === 'cursor') {
         sendMessage({
@@ -584,6 +684,7 @@ export function useChatComposerState({
             resume: Boolean(effectiveSessionId),
             model: cursorModel,
             skipPermissions: toolsSettings?.skipPermissions || false,
+            sessionSummary,
             toolsSettings,
           },
         });
@@ -598,7 +699,38 @@ export function useChatComposerState({
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
             model: codexModel,
+            sessionSummary,
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
+          },
+        });
+      } else if (provider === 'gemini') {
+        sendMessage({
+          type: 'gemini-command',
+          command: messageContent,
+          sessionId: effectiveSessionId,
+          options: {
+            cwd: resolvedProjectPath,
+            projectPath: resolvedProjectPath,
+            sessionId: effectiveSessionId,
+            resume: Boolean(effectiveSessionId),
+            model: geminiModel,
+            sessionSummary,
+            permissionMode,
+            toolsSettings,
+          },
+        });
+      } else if (provider === 'opencode') {
+        sendMessage({
+          type: 'opencode-command',
+          command: messageContent,
+          sessionId: effectiveSessionId,
+          options: {
+            cwd: resolvedProjectPath,
+            projectPath: resolvedProjectPath,
+            sessionId: effectiveSessionId,
+            resume: Boolean(effectiveSessionId),
+            model: opencodeModel,
+            sessionSummary,
           },
         });
       } else {
@@ -613,6 +745,7 @@ export function useChatComposerState({
             toolsSettings,
             permissionMode,
             model: claudeModel,
+            sessionSummary,
             images: uploadedImages,
           },
         });
@@ -625,36 +758,39 @@ export function useChatComposerState({
       setUploadingImages(new Map());
       setImageErrors(new Map());
       setIsTextareaExpanded(false);
-      setThinkingMode('none');
 
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
 
-      safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
+      safeLocalStorage.removeItem(`draft_input_${selectedProject.projectId}`);
     },
     [
+      selectedSession,
       attachedImages,
       claudeModel,
       codexModel,
       currentSessionId,
       cursorModel,
+      executeCommand,
+      geminiModel,
+      opencodeModel,
       isLoading,
       onSessionActive,
+      onSessionProcessing,
       pendingViewSessionRef,
       permissionMode,
       provider,
       resetCommandMenuState,
       scrollToBottom,
       selectedProject,
-      selectedSession?.id,
       sendMessage,
       setCanAbortSession,
-      setChatMessages,
+      addMessage,
       setClaudeStatus,
       setIsLoading,
       setIsUserScrolledUp,
-      thinkingMode,
+      slashCommands,
     ],
   );
 
@@ -667,27 +803,27 @@ export function useChatComposerState({
   }, [input]);
 
   useEffect(() => {
-    if (!selectedProject) {
+    if (!selectedProjectId) {
       return;
     }
-    const savedInput = safeLocalStorage.getItem(`draft_input_${selectedProject.name}`) || '';
+    const savedInput = safeLocalStorage.getItem(`draft_input_${selectedProjectId}`) || '';
     setInput((previous) => {
       const next = previous === savedInput ? previous : savedInput;
       inputValueRef.current = next;
       return next;
     });
-  }, [selectedProject?.name]);
+  }, [selectedProjectId]);
 
   useEffect(() => {
-    if (!selectedProject) {
+    if (!selectedProjectId) {
       return;
     }
     if (input !== '') {
-      safeLocalStorage.setItem(`draft_input_${selectedProject.name}`, input);
+      safeLocalStorage.setItem(`draft_input_${selectedProjectId}`, input);
     } else {
-      safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
+      safeLocalStorage.removeItem(`draft_input_${selectedProjectId}`);
     }
-  }, [input, selectedProject]);
+  }, [input, selectedProjectId]);
 
   useEffect(() => {
     if (!textareaRef.current) {
@@ -695,7 +831,7 @@ export function useChatComposerState({
     }
     // Re-run when input changes so restored drafts get the same autosize behavior as typed text.
     textareaRef.current.style.height = 'auto';
-    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    textareaRef.current.style.height = `${Math.max(22, textareaRef.current.scrollHeight)}px`;
     const lineHeight = parseInt(window.getComputedStyle(textareaRef.current).lineHeight);
     const expanded = textareaRef.current.scrollHeight > lineHeight * 2;
     setIsTextareaExpanded(expanded);
@@ -782,7 +918,7 @@ export function useChatComposerState({
     (event: FormEvent<HTMLTextAreaElement>) => {
       const target = event.currentTarget;
       target.style.height = 'auto';
-      target.style.height = `${target.scrollHeight}px`;
+      target.style.height = `${Math.max(22, target.scrollHeight)}px`;
       setCursorPosition(target.selectionStart);
       syncInputOverlayScroll(target);
 
@@ -808,21 +944,17 @@ export function useChatComposerState({
       return;
     }
 
-    const pendingSessionId =
-      typeof window !== 'undefined' ? sessionStorage.getItem('pendingSessionId') : null;
     const cursorSessionId =
       typeof window !== 'undefined' ? sessionStorage.getItem('cursorSessionId') : null;
 
     const candidateSessionIds = [
       currentSessionId,
-      pendingViewSessionRef.current?.sessionId || null,
-      pendingSessionId,
       provider === 'cursor' ? cursorSessionId : null,
       selectedSession?.id || null,
     ];
 
     const targetSessionId =
-      candidateSessionIds.find((sessionId) => Boolean(sessionId) && !isTemporarySessionId(sessionId)) || null;
+      candidateSessionIds.find((sessionId) => Boolean(sessionId)) || null;
 
     if (!targetSessionId) {
       console.warn('Abort requested but no concrete session ID is available yet.');
@@ -834,31 +966,7 @@ export function useChatComposerState({
       sessionId: targetSessionId,
       provider,
     });
-  }, [canAbortSession, currentSessionId, pendingViewSessionRef, provider, selectedSession?.id, sendMessage]);
-
-  const handleTranscript = useCallback((text: string) => {
-    if (!text.trim()) {
-      return;
-    }
-
-    setInput((previousInput) => {
-      const newInput = previousInput.trim() ? `${previousInput} ${text}` : text;
-      inputValueRef.current = newInput;
-
-      setTimeout(() => {
-        if (!textareaRef.current) {
-          return;
-        }
-
-        textareaRef.current.style.height = 'auto';
-        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-        const lineHeight = parseInt(window.getComputedStyle(textareaRef.current).lineHeight);
-        setIsTextareaExpanded(textareaRef.current.scrollHeight > lineHeight * 2);
-      }, 0);
-
-      return newInput;
-    });
-  }, []);
+  }, [canAbortSession, currentSessionId, provider, selectedSession?.id, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
     (suggestion: { entry: string; toolName: string }) => {
@@ -919,8 +1027,6 @@ export function useChatComposerState({
     textareaRef,
     inputHighlightRef,
     isTextareaExpanded,
-    thinkingMode,
-    setThinkingMode,
     slashCommandsCount,
     filteredCommands,
     frequentCommands,
@@ -952,10 +1058,12 @@ export function useChatComposerState({
     syncInputOverlayScroll,
     handleClearInput,
     handleAbortSession,
-    handleTranscript,
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
     isInputFocused,
+    commandModalPayload,
+    closeCommandModal,
+    showCostModal,
   };
 }

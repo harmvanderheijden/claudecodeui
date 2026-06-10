@@ -1,25 +1,23 @@
 import React, { useEffect } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
-import FileTree from '../../FileTree';
-import StandaloneShell from '../../StandaloneShell';
-import GitPanel from '../../GitPanel';
-import ErrorBoundary from '../../ErrorBoundary';
+import FileTree from '../../file-tree/view/FileTree';
+import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
+import GitPanel from '../../git-panel/view/GitPanel';
+import PluginTabContent from '../../plugins/view/PluginTabContent';
+import type { MainContentProps } from '../types/types';
+import { useTaskMaster } from '../../../contexts/TaskMasterContext';
+import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
+import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import { useUiPreferences } from '../../../hooks/useUiPreferences';
+import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
+import EditorSidebar from '../../code-editor/view/EditorSidebar';
+import type { Project } from '../../../types/app';
+import { TaskMasterPanel } from '../../task-master';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
-import EditorSidebar from './subcomponents/EditorSidebar';
-import TaskMasterPanel from './subcomponents/TaskMasterPanel';
-import type { MainContentProps } from '../types/types';
-
-import { useTaskMaster } from '../../../contexts/TaskMasterContext';
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
-import { useUiPreferences } from '../../../hooks/useUiPreferences';
-import { useEditorSidebar } from '../hooks/useEditorSidebar';
-import type { Project } from '../../../types/app';
-
-const AnyStandaloneShell = StandaloneShell as any;
-const AnyGitPanel = GitPanel as any;
+import ErrorBoundary from './ErrorBoundary';
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -49,10 +47,10 @@ function MainContent({
   onSessionProcessing,
   onSessionNotProcessing,
   processingSessions,
-  onReplaceTemporarySession,
   onNavigateToSession,
   onShowSettings,
   externalMessageUpdate,
+  newSessionTrigger,
 }: MainContentProps) {
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
@@ -66,6 +64,7 @@ function MainContent({
     editingFile,
     editorWidth,
     editorExpanded,
+    hasManualWidth,
     resizeHandleRef,
     handleFileOpen,
     handleCloseEditor,
@@ -77,16 +76,28 @@ function MainContent({
   });
 
   useEffect(() => {
-    if (selectedProject && selectedProject !== currentProject) {
+    // Identify projects by DB `projectId`; the TaskMaster context uses the
+    // same identifier to key its internal maps.
+    const selectedProjectId = selectedProject?.projectId;
+    const currentProjectId = currentProject?.projectId;
+
+    if (selectedProject && selectedProjectId !== currentProjectId) {
       setCurrentProject?.(selectedProject);
     }
-  }, [selectedProject, currentProject, setCurrentProject]);
+  }, [selectedProject, currentProject?.projectId, setCurrentProject]);
 
   useEffect(() => {
     if (!shouldShowTasksTab && activeTab === 'tasks') {
       setActiveTab('chat');
     }
   }, [shouldShowTasksTab, activeTab, setActiveTab]);
+
+  usePaletteOpsRegister({
+    openFile: (filePath: string) => {
+      setActiveTab('files');
+      handleFileOpen(filePath);
+    },
+  });
 
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
@@ -97,7 +108,7 @@ function MainContent({
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full flex-col">
       <MainContentHeader
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -108,8 +119,8 @@ function MainContent({
         onMenuClick={onMenuClick}
       />
 
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        <div className={`flex flex-col min-h-0 overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1 ${activeTab === 'files' && editingFile ? 'min-w-[200px]' : ''}`}>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
           <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
             <ErrorBoundary showDetails>
               <ChatInterface
@@ -125,7 +136,6 @@ function MainContent({
                 onSessionProcessing={onSessionProcessing}
                 onSessionNotProcessing={onSessionNotProcessing}
                 processingSessions={processingSessions}
-                onReplaceTemporarySession={onReplaceTemporarySession}
                 onNavigateToSession={onNavigateToSession}
                 onShowSettings={onShowSettings}
                 autoExpandTools={autoExpandTools}
@@ -134,6 +144,7 @@ function MainContent({
                 autoScrollToBottom={autoScrollToBottom}
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
+                newSessionTrigger={newSessionTrigger}
                 onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
               />
             </ErrorBoundary>
@@ -147,19 +158,34 @@ function MainContent({
 
           {activeTab === 'shell' && (
             <div className="h-full w-full overflow-hidden">
-              <AnyStandaloneShell project={selectedProject} session={selectedSession} showHeader={false} />
+              <StandaloneShell
+                project={selectedProject}
+                session={selectedSession}
+                showHeader={false}
+                isActive={activeTab === 'shell'}
+              />
             </div>
           )}
 
           {activeTab === 'git' && (
             <div className="h-full overflow-hidden">
-              <AnyGitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
+              <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
             </div>
           )}
 
           {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
 
           <div className={`h-full overflow-hidden ${activeTab === 'preview' ? 'block' : 'hidden'}`} />
+
+          {activeTab.startsWith('plugin:') && (
+            <div className="h-full overflow-hidden">
+              <PluginTabContent
+                pluginName={activeTab.replace('plugin:', '')}
+                selectedProject={selectedProject}
+                selectedSession={selectedSession}
+              />
+            </div>
+          )}
         </div>
 
         <EditorSidebar
@@ -167,6 +193,7 @@ function MainContent({
           isMobile={isMobile}
           editorExpanded={editorExpanded}
           editorWidth={editorWidth}
+          hasManualWidth={hasManualWidth}
           resizeHandleRef={resizeHandleRef}
           onResizeStart={handleResizeStart}
           onCloseEditor={handleCloseEditor}
