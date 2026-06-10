@@ -29,6 +29,15 @@ import {
     reconnectSessionWriter,
 } from './claude-sdk.js';
 import {
+    queryClaudeSDKPersistent,
+    abortClaudePersistentSession,
+    isClaudePersistentSessionActive,
+    getActiveClaudePersistentSessions,
+    reconnectPersistentSessionWriter,
+    hasClaudePersistentSession,
+    endAllClaudePersistentSessions,
+} from './claude-persistent-sessions.js';
+import {
     spawnCursor,
     abortCursorSession,
     isCursorSessionActive,
@@ -76,7 +85,7 @@ import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './util
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
-import { IS_PLATFORM } from './constants/config.js';
+import { IS_PLATFORM, CLAUDE_PERSISTENT_SESSIONS } from './constants/config.js';
 import { c } from './utils/colors.js';
 
 const __dirname = getModuleDir(import.meta.url);
@@ -98,6 +107,22 @@ function readUsageNumber(value) {
 const app = express();
 const server = http.createServer(app);
 
+// Persistent Claude sessions (opt-in via CLAUDE_PERSISTENT_SESSIONS): keep one
+// warm subprocess per chat session so MCP servers survive between prompts.
+// These composers check the persistent registry first and fall back to the
+// legacy one-shot path; when the flag is off, only the one-shot path is used.
+const claudeChatQuery = CLAUDE_PERSISTENT_SESSIONS ? queryClaudeSDKPersistent : queryClaudeSDK;
+const claudeAbortSession = async (sessionId) =>
+    hasClaudePersistentSession(sessionId)
+        ? abortClaudePersistentSession(sessionId)
+        : abortClaudeSDKSession(sessionId);
+const claudeSessionActive = (sessionId) =>
+    isClaudePersistentSessionActive(sessionId) || isClaudeSDKSessionActive(sessionId);
+const claudeActiveSessions = () =>
+    Array.from(new Set([...getActiveClaudeSDKSessions(), ...getActiveClaudePersistentSessions()]));
+const claudeReconnectWriter = (sessionId, ws) =>
+    reconnectPersistentSessionWriter(sessionId, ws) || reconnectSessionWriter(sessionId, ws);
+
 // Single WebSocket server that handles chat, shell, and plugin proxy paths.
 const wss = createWebSocketServer(server, {
     verifyClient: {
@@ -105,25 +130,25 @@ const wss = createWebSocketServer(server, {
         authenticateWebSocket,
     },
     chat: {
-        queryClaudeSDK,
+        queryClaudeSDK: claudeChatQuery,
         spawnCursor,
         queryCodex,
         spawnGemini,
         spawnOpenCode,
-        abortClaudeSDKSession,
+        abortClaudeSDKSession: claudeAbortSession,
         abortCursorSession,
         abortCodexSession,
         abortGeminiSession,
         abortOpenCodeSession,
         resolveToolApproval,
-        isClaudeSDKSessionActive,
+        isClaudeSDKSessionActive: claudeSessionActive,
         isCursorSessionActive,
         isCodexSessionActive,
         isGeminiSessionActive,
         isOpenCodeSessionActive,
-        reconnectSessionWriter,
+        reconnectSessionWriter: claudeReconnectWriter,
         getPendingApprovalsForSession,
-        getActiveClaudeSDKSessions,
+        getActiveClaudeSDKSessions: claudeActiveSessions,
         getActiveCursorSessions,
         getActiveCodexSessions,
         getActiveGeminiSessions,
@@ -1695,6 +1720,8 @@ async function startServer() {
         await closeSessionsWatcher();
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {
+            // Tear down warm Claude subprocesses so their MCP children aren't orphaned.
+            await endAllClaudePersistentSessions().catch(() => {});
             await stopAllPlugins();
             process.exit(0);
         };
