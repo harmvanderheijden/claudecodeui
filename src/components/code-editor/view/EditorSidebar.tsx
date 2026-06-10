@@ -1,7 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import type { MouseEvent, MutableRefObject } from 'react';
 import type { CodeEditorFile } from '../types/types';
-import CodeEditor from './CodeEditor';
+// Route files through the document viewer, which falls back to CodeEditor for
+// code/text files and uses dedicated viewers for PDF / docx / markdown.
+import DocumentViewerRouter from '../../viewers/DocumentViewerRouter';
+
+// DocumentViewerRouter is an untyped .jsx module; it accepts the same props the
+// editor passed to CodeEditor plus optional viewer-specific ones.
+const FileViewer = DocumentViewerRouter as unknown as (props: {
+  file: CodeEditorFile;
+  onClose: () => void;
+  projectPath?: string;
+  isSidebar?: boolean;
+  isExpanded?: boolean;
+  onToggleExpand?: () => void;
+  onPopOut?: () => void;
+}) => JSX.Element;
 
 type EditorSidebarProps = {
   editingFile: CodeEditorFile | null;
@@ -86,7 +100,7 @@ export default function EditorSidebar({
 
   if (isMobile || poppedOut) {
     return (
-      <CodeEditor
+      <FileViewer
         file={editingFile}
         onClose={() => {
           setPoppedOut(false);
@@ -118,7 +132,7 @@ export default function EditorSidebar({
         className={`h-full overflow-hidden border-l border-gray-200 dark:border-gray-700 ${useFlexLayout ? 'min-w-0 flex-1' : `min-w-[ flex-shrink-0${MIN_EDITOR_WIDTH}px]`}`}
         style={useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
-        <CodeEditor
+        <FileViewer
           file={editingFile}
           onClose={onCloseEditor}
           projectPath={projectPath}

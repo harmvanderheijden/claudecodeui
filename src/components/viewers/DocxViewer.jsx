@@ -27,7 +27,7 @@ export default function DocxViewer({
         setLoading(true);
         setError(null);
 
-        const url = `/api/projects/${encodeURIComponent(file.projectName)}/files/content?path=${encodeURIComponent(file.path)}`;
+        const url = `/api/projects/${encodeURIComponent(file.projectId ?? projectPath)}/files/content?path=${encodeURIComponent(file.path)}`;
         const response = await authenticatedFetch(url);
 
         if (!response.ok) {
@@ -61,7 +61,7 @@ export default function DocxViewer({
         URL.revokeObjectURL(blobUrl);
       }
     };
-  }, [file.path, file.projectName]);
+  }, [file.path, file.projectId, projectPath]);
 
   const handleDownload = useCallback(() => {
     if (blobUrl) {

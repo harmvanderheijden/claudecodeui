@@ -1,5 +1,5 @@
 import React from 'react';
-import CodeEditor from '../CodeEditor';
+import CodeEditor from '../code-editor/view/CodeEditor';
 import PDFViewer from './PDFViewer';
 import MarkdownViewer from './MarkdownViewer';
 import DocxViewer from './DocxViewer';

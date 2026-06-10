@@ -137,7 +137,7 @@ export default function MarkdownViewer({
         setLoading(true);
         setError(null);
 
-        const response = await api.readFile(file.projectName, file.path);
+        const response = await api.readFile(file.projectId ?? projectPath, file.path);
 
         if (!response.ok) {
           throw new Error(`Failed to load file: ${response.status} ${response.statusText}`);
@@ -154,7 +154,7 @@ export default function MarkdownViewer({
     };
 
     loadContent();
-  }, [file.path, file.projectName]);
+  }, [file.path, file.projectId, projectPath]);
 
   const handleDownload = () => {
     const blob = new Blob([content], { type: 'text/markdown' });

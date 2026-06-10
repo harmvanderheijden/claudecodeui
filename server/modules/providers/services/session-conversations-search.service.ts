@@ -90,6 +90,7 @@ const UNKNOWN_PROJECT_KEY = '__unknown_project__';
 
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
+  '<local-command-caveat>',
   'Caveat:',
   'Invalid API key',
   '[Request interrupted',

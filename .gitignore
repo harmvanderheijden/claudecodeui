@@ -142,3 +142,6 @@ tasks/
 
 # Git worktrees
 .worktrees/
+
+# Copied from node_modules by postinstall script (generated, not committed)
+public/pdfjs-wasm/

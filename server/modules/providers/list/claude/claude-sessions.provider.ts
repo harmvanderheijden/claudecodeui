@@ -211,6 +211,7 @@ async function getSessionMessages(
  */
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
+  '<local-command-caveat>',
   'Caveat:',
   '[Request interrupted',
 ] as const;

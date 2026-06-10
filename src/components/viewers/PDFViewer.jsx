@@ -43,7 +43,7 @@ export default function PDFViewer({
         setError(null);
 
         // Fetch PDF as blob
-        const url = `/api/projects/${encodeURIComponent(file.projectName)}/files/content?path=${encodeURIComponent(file.path)}`;
+        const url = `/api/projects/${encodeURIComponent(file.projectId ?? projectPath)}/files/content?path=${encodeURIComponent(file.path)}`;
         const response = await authenticatedFetch(url);
 
         if (!response.ok) {
@@ -69,7 +69,7 @@ export default function PDFViewer({
         URL.revokeObjectURL(pdfUrl);
       }
     };
-  }, [file.path, file.projectName]);
+  }, [file.path, file.projectId, projectPath]);
 
   const onDocumentLoadSuccess = ({ numPages }) => {
     setNumPages(numPages);
