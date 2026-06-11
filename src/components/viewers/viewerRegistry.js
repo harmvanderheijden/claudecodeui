@@ -9,6 +9,7 @@ export const VIEWER_TYPES = {
   IMAGE: 'image',
   MARKDOWN: 'markdown',
   DOCX: 'docx',
+  HTML: 'html',
   // Future viewer types:
   // EMAIL: 'email',
   // VIDEO: 'video',
@@ -44,13 +45,20 @@ export const VIEWER_CONFIG = {
     renderIn: 'sidebar',
   },
 
+  [VIEWER_TYPES.HTML]: {
+    extensions: ['html', 'htm'],
+    mimeTypes: ['text/html'],
+    canEdit: false,
+    renderIn: 'sidebar',
+  },
+
   [VIEWER_TYPES.CODE]: {
     // Default viewer for text-based files
     extensions: [
       // JavaScript/TypeScript
       'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts',
-      // Web
-      'html', 'htm', 'css', 'scss', 'sass', 'less',
+      // Web (html/htm handled by the dedicated HTML viewer)
+      'css', 'scss', 'sass', 'less',
       // Python
       'py', 'pyw', 'pyi',
       // Other languages

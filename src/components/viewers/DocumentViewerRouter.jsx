@@ -3,6 +3,7 @@ import CodeEditor from '../code-editor/view/CodeEditor';
 import PDFViewer from './PDFViewer';
 import MarkdownViewer from './MarkdownViewer';
 import DocxViewer from './DocxViewer';
+import HtmlViewer from './HtmlViewer';
 import { getViewerType, VIEWER_TYPES } from './viewerRegistry';
 
 /**
@@ -55,6 +56,19 @@ export default function DocumentViewerRouter({
     case VIEWER_TYPES.DOCX:
       return (
         <DocxViewer
+          file={file}
+          onClose={onClose}
+          projectPath={projectPath}
+          isSidebar={isSidebar}
+          isExpanded={isExpanded}
+          onToggleExpand={onToggleExpand}
+          onPopOut={onPopOut}
+        />
+      );
+
+    case VIEWER_TYPES.HTML:
+      return (
+        <HtmlViewer
           file={file}
           onClose={onClose}
           projectPath={projectPath}
