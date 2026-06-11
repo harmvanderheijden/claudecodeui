@@ -12,9 +12,10 @@ export const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
  * spawning a fresh subprocess per prompt via `resume`. This keeps MCP servers
  * warm between prompts so their in-memory state survives a multi-turn session.
  *
- * Read once at launch. Defaults to false (legacy per-prompt behavior).
+ * Read once at launch. Enabled by default; set CLAUDE_PERSISTENT_SESSIONS=false
+ * to opt out and fall back to the legacy per-prompt behavior.
  */
-export const CLAUDE_PERSISTENT_SESSIONS = process.env.CLAUDE_PERSISTENT_SESSIONS === 'true';
+export const CLAUDE_PERSISTENT_SESSIONS = process.env.CLAUDE_PERSISTENT_SESSIONS !== 'false';
 
 const parsePositiveInt = (value, fallback) => {
   const parsed = parseInt(value, 10);
